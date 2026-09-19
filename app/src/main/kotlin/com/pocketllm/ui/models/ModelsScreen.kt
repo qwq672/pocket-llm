@@ -114,8 +114,7 @@ fun ModelsScreen(
             ExtendedFloatingActionButton(
                 text = { Text("导入本地模型") },
                 icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-                onClick = launchImport,
-                tonalElevation = 3.dp
+                onClick = launchImport
             )
         },
         snackbarHost = { SnackbarHost(snackbarHost) }

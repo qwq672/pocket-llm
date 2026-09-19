@@ -43,6 +43,19 @@
             </intent-filter>
         </activity>
 
+        <!-- App 实现了 Configuration.Provider，手动初始化 WorkManager，
+             需移除默认的 WorkManagerInitializer（否则 release lint 报错） -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
         <!-- 文件下载 Service -->
         <service
             android:name=".domain.download.DownloadService"

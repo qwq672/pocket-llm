@@ -54,7 +54,7 @@ internal fun retrofitBuild(baseUrl: String): retrofit2.Retrofit {
                 .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
                 .build()
         )
-        .addConverterFactory(com.squareup.retrofit2.converter.moshi.MoshiConverterFactory.create(
+        .addConverterFactory(retrofit2.converter.moshi.MoshiConverterFactory.create(
             com.squareup.moshi.Moshi.Builder().build()
         ))
         .build()

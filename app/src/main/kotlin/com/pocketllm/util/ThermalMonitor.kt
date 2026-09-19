@@ -68,22 +68,9 @@ class ThermalMonitor {
 
         if (sysPercent >= 0) return sysPercent
 
-        // 2. PowerManager fallback（API 29+）
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val pm = appContext?.getSystemService(Context.POWER_SERVICE) as? PowerManager
-                val status = pm?.getThermalStatus() ?: PowerManager.THERMAL_STATUS_NONE
-                when (status) {
-                    PowerManager.THERMAL_STATUS_NONE -> 0
-                    PowerManager.THERMAL_STATUS_LIGHT -> 20
-                    PowerManager.THERMAL_STATUS_MODERATE -> 40
-                    PowerManager.THERMAL_STATUS_SEVERE -> 70
-                    PowerManager.THERMAL_STATUS_CRITICAL -> 90
-                    PowerManager.THERMAL_STATUS_EMERGENCY -> 100
-                    else -> 0
-                }
-            } else 0
-        } catch (_: Exception) { 0 }
+        // 2. 没有可用 thermal zone 时按常温处理（PowerManager.getThermalStatus 为 API 29+，
+        //    且部分设备 sysfs 权限受限，这里不强制依赖，直接返回 0）。
+        return 0
     }
 
     private fun findCpuTempZone(): String? {

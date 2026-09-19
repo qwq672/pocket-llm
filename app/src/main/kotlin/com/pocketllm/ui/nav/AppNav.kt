@@ -8,7 +8,6 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
@@ -31,18 +30,16 @@ import androidx.navigation.navArgument
 import com.pocketllm.PocketLLMApp
 import com.pocketllm.R
 import com.pocketllm.ui.chat.ChatScreen
-import com.pocketllm.ui.download.DownloadScreen
 import com.pocketllm.ui.models.ModelsScreen
 import com.pocketllm.ui.settings.SettingsScreen
 
 sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     data object Chat     : Dest("chat",     R.string.nav_chat,     Icons.Outlined.ChatBubbleOutline)
     data object Models   : Dest("models",   R.string.nav_models,   Icons.Outlined.Memory)
-    data object Download : Dest("download", R.string.nav_download, Icons.Outlined.CloudDownload)
     data object Settings : Dest("settings", R.string.nav_settings, Icons.Outlined.Settings)
 }
 
-private val bottomNav = listOf(Dest.Chat, Dest.Models, Dest.Download, Dest.Settings)
+private val bottomNav = listOf(Dest.Chat, Dest.Models, Dest.Settings)
 
 @Composable
 fun AppNav() {
@@ -81,7 +78,6 @@ fun AppNav() {
         ) {
             composable(Dest.Chat.route)     { ChatScreen() }
             composable(Dest.Models.route)   { ModelsScreen() }
-            composable(Dest.Download.route) { DownloadScreen() }
             composable(Dest.Settings.route) { SettingsScreen() }
         }
     }

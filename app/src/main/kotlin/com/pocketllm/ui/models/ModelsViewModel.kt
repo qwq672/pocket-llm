@@ -73,4 +73,8 @@ class ModelsViewModel : ViewModel() {
             repo.touchUsed(id)
         }
     }
+
+    fun delete(m: ModelInfo) {
+        viewModelScope.launch { repo.delete(m) }
+    }
 }

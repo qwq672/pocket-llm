@@ -68,9 +68,8 @@ android {
     // 资源压缩 + 代码混淆，缩小体积
     buildTypes {
         release {
-            // 临时关闭 R8/资源收缩以排除启动闪退；确认稳定后再开。
-            isMinifyEnabled = false
-            isShrinkResources = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -145,6 +144,8 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
+    // moshi-kotlin 反射需要与 Kotlin 编译器同版本的 kotlin-reflect，否则运行时 TypeUtils NoSuchMethodError
+    implementation("org.jetbrains.kotlin:kotlin-reflect:2.0.20")
 
     // WorkManager（断点续传、后台下载）
     implementation("androidx.work:work-runtime-ktx:2.9.1")

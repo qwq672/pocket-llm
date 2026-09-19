@@ -6,6 +6,9 @@
 -keep class com.pocketllm.data.model.** { *; }
 -keep class com.pocketllm.data.db.** { *; }
 -keep class com.pocketllm.domain.inference.** { *; }
+-keep class com.pocketllm.domain.download.** { *; }
+# Moshi Kotlin 反射：保留 data class 构造函数参数
+-keepclassmembers class com.pocketllm.** { <init>(...); }
 
 # kotlinx.serialization
 -keepattributes *Annotation*, InnerClasses

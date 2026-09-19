@@ -29,6 +29,33 @@ class DownloadViewModel : ViewModel() {
         val progress: Map<String, Int> = emptyMap()
     )
 
+    /** 一键推荐模型（repoId 内的精确文件名） */
+    data class PrefabModel(
+        val label: String,
+        val repo: String,
+        val file: String,
+        val note: String
+    )
+
+    val prefabs = listOf(
+        PrefabModel("Qwen2.5-1.5B-Instruct · Q6_K",
+            "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+            "qwen2.5-1.5b-instruct-q6_k.gguf",
+            "约 1.2 GB · 均衡推荐"),
+        PrefabModel("Gemma-3-1B-IT · Q8_0",
+            "google/gemma-3-1b-it-GGUF",
+            "gemma-3-1b-it-Q8_0.gguf",
+            "约 1.1 GB · 小而快"),
+        PrefabModel("Qwen2.5-3B-Instruct · Q4_K_M",
+            "Qwen/Qwen2.5-3B-Instruct-GGUF",
+            "qwen2.5-3b-instruct-q4_k_m.gguf",
+            "约 2.0 GB · 更强能力"),
+        PrefabModel("LFM2.6B · Q4_K_M",
+            "LiquidAI/LFM2.6B-Instruct-GGUF",
+            "lfm2.6b-instruct-q4_k_m.gguf",
+            "约 1.6 GB · 流式小模型")
+    )
+
     private val _ui = MutableStateFlow(UiState(sources = container.downloadSources))
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
@@ -61,10 +88,10 @@ class DownloadViewModel : ViewModel() {
         Unit
     }
 
-    fun download(file: RemoteGgufFile) {
+    fun download(repoId: String, file: RemoteGgufFile) {
         viewModelScope.launch {
             val src = container.sourceById(_ui.value.currentSourceId)
-            val url = src.fileUrl(_ui.value.repoInput, file.path)
+            val url = src.fileUrl(repoId, file.path)
             val destDir = FileUtils.modelsDir(container.appContext)
             val dest = File(destDir, file.path.substringAfterLast('/'))
             runCatching {
@@ -82,5 +109,10 @@ class DownloadViewModel : ViewModel() {
                 _ui.value = _ui.value.copy(error = e.message)
             }
         }
+    }
+
+    /** 一键下载推荐模型 */
+    fun downloadPrefab(p: PrefabModel) {
+        download(p.repo, RemoteGgufFile(path = p.file, sizeBytes = 0, lastModified = ""))
     }
 }

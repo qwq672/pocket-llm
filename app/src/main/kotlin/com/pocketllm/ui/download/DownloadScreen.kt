@@ -89,7 +89,7 @@ fun DownloadScreen(vm: DownloadViewModel = viewModel()) {
                     FileRow(
                         file = f,
                         progress = ui.progress[f.path] ?: 0,
-                        onDownload = { vm.download(f) }
+                        onDownload = { vm.download(ui.repoInput, f) }
                     )
                 }
             }

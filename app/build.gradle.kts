@@ -30,8 +30,11 @@ android {
                     "-DANDROID_PLATFORM=android-26",
                     "-DCMAKE_BUILD_TYPE=Release"
                 )
-                cFlags += "-Ofast -fvisibility=hidden"
-                cppFlags += "-std=c++17 -fvisibility=hidden -fno-rtti -fno-exceptions"
+                // 注意：这些 flags 会同时作用于 add_subdirectory 的 llama.cpp。
+                // llama.cpp 0.4.x 的 ggml-backend-reg 等用到 try/RTTI，不能全局关异常/RTTI。
+                // 针对本 app 的优化（隐藏符号、gc-sections）在 CMakeLists.txt 里对 pocketllm target 单独设置。
+                cFlags += "-O3"
+                cppFlags += "-std=c++17"
             }
         }
     }

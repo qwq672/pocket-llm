@@ -19,7 +19,7 @@ import java.io.File
  *
  * 数据来源（按优先级）：
  * 1. PowerManager.THERMAL_STATUS_* （API 29+，最权威但分辨率低）
- * 2. /sys/class/thermal/thermal_zone*/temp （sysfs，分辨率高）
+ * 2. /sys/class/thermal/thermal_zoneN/temp （sysfs，分辨率高）
  *
  * 只读，不写、不强制降温。给 [ThermalGovernor] 用。
  */

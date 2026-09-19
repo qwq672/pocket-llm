@@ -9,7 +9,7 @@ import java.io.File
  * - 大核数：用于自动选择 CPU 线程数（不抢小核，避免系统卡顿与功耗浪费）
  * - 总核数：用于上限
  *
- * Android 没有公开 API 直接拿大核数，这里通过 /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq
+ * Android 没有公开 API 直接拿大核数，这里通过 /sys/devices/system/cpu/cpuN/cpufreq/cpuinfo_max_freq
  * 拿到每个核的最高频率，超过 1.8GHz 视为大核。
  */
 object CpuInfo {

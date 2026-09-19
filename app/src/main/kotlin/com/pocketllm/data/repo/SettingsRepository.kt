@@ -1,7 +1,6 @@
 package com.pocketllm.data.repo
 
 import android.content.Context
-import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -34,6 +33,10 @@ class SettingsRepository(private val context: Context) {
         val DOWNLOAD_SOURCE = stringPreferencesKey("dl_source")
         val LANGUAGE        = stringPreferencesKey("lang")
         val LAST_MODEL_ID   = intPreferencesKey("last_model_id")
+        // 外观 & 日志
+        val DYNAMIC_COLOR   = booleanPreferencesKey("dynamic_color")
+        val DARK_THEME      = stringPreferencesKey("dark_theme") // "system" / "light" / "dark"
+        val LOGGING_ENABLED = booleanPreferencesKey("logging_enabled")
     }
 
     val config: Flow<InferenceConfig> = context.dataStore.data.map { p ->
@@ -58,6 +61,13 @@ class SettingsRepository(private val context: Context) {
     val downloadSource: Flow<String> = context.dataStore.data.map { it[Keys.DOWNLOAD_SOURCE] ?: "hf_mirror" }
     val language: Flow<String> = context.dataStore.data.map { it[Keys.LANGUAGE] ?: "zh" }
     val lastModelId: Flow<Long> = context.dataStore.data.map { (it[Keys.LAST_MODEL_ID] ?: -1L).toLong() }
+
+    /** Material You 取色 */
+    val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[Keys.DYNAMIC_COLOR] ?: true }
+    /** "system" / "light" / "dark" */
+    val darkTheme: Flow<String> = context.dataStore.data.map { it[Keys.DARK_THEME] ?: "system" }
+    /** 日志开关 */
+    val loggingEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.LOGGING_ENABLED] ?: true }
 
     suspend fun save(c: InferenceConfig) {
         context.dataStore.edit { p ->
@@ -86,4 +96,13 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setLastModel(id: Long) =
         context.dataStore.edit { it[Keys.LAST_MODEL_ID] = id.toInt() }
+
+    suspend fun setDynamicColor(on: Boolean) =
+        context.dataStore.edit { it[Keys.DYNAMIC_COLOR] = on }
+
+    suspend fun setDarkTheme(mode: String) =
+        context.dataStore.edit { it[Keys.DARK_THEME] = mode }
+
+    suspend fun setLoggingEnabled(on: Boolean) =
+        context.dataStore.edit { it[Keys.LOGGING_ENABLED] = on }
 }

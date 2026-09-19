@@ -6,6 +6,7 @@ import com.pocketllm.PocketLLMApp
 import com.pocketllm.domain.inference.BackendType
 import com.pocketllm.domain.inference.InferenceConfig
 import com.pocketllm.infra.jni.NativeBridge
+import com.pocketllm.util.AppLogger
 import com.pocketllm.util.CpuInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,7 +22,15 @@ class SettingsViewModel : ViewModel() {
         val config: InferenceConfig = InferenceConfig(),
         val nativeVersion: String = "",
         val socName: String = "",
-        val bigCores: Int = 0
+        val bigCores: Int = 0,
+        val dynamicColor: Boolean = true,
+        val darkTheme: String = "system",
+        val loggingEnabled: Boolean = true,
+        val logFilePath: String? = null,
+        // 可用后端
+        val vulkanAvailable: Boolean = false,
+        val npuAvailable: Boolean = false,
+        val openclAvailable: Boolean = false
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -34,14 +43,40 @@ class SettingsViewModel : ViewModel() {
             }
         }
         viewModelScope.launch {
+            container.settingsRepository.dynamicColor.collectLatest {
+                _ui.value = _ui.value.copy(dynamicColor = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.darkTheme.collectLatest {
+                _ui.value = _ui.value.copy(darkTheme = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.loggingEnabled.collectLatest {
+                _ui.value = _ui.value.copy(loggingEnabled = it)
+                AppLogger.setEnabled(it)
+            }
+        }
+        viewModelScope.launch {
             runCatching { container.nativeBridge.nativeVersion() }
                 .onSuccess { _ui.value = _ui.value.copy(nativeVersion = it) }
                 .onFailure { _ui.value = _ui.value.copy(nativeVersion = "native not loaded") }
         }
         _ui.value = _ui.value.copy(
             socName = CpuInfo.socName,
-            bigCores = CpuInfo.bigCores
+            bigCores = CpuInfo.bigCores,
+            logFilePath = AppLogger.filePath()
         )
+        // 探测后端可用性
+        viewModelScope.launch {
+            val b = container.nativeBridge
+            _ui.value = _ui.value.copy(
+                vulkanAvailable = runCatching { b.vulkanAvailable() }.getOrDefault(false),
+                npuAvailable    = runCatching { b.npuAvailable() }.getOrDefault(false),
+                openclAvailable = runCatching { b.openclAvailable() }.getOrDefault(false)
+            )
+        }
     }
 
     fun update(c: InferenceConfig) {
@@ -54,5 +89,21 @@ class SettingsViewModel : ViewModel() {
 
     fun onKvQuantChange(q: String) {
         update(_ui.value.config.copy(kvQuant = q))
+    }
+
+    fun onDynamicColorChange(on: Boolean) {
+        viewModelScope.launch { container.settingsRepository.setDynamicColor(on) }
+    }
+
+    fun onDarkThemeChange(mode: String) {
+        viewModelScope.launch { container.settingsRepository.setDarkTheme(mode) }
+    }
+
+    fun onLoggingEnabledChange(on: Boolean) {
+        viewModelScope.launch { container.settingsRepository.setLoggingEnabled(on) }
+    }
+
+    fun clearLog() {
+        AppLogger.clear()
     }
 }

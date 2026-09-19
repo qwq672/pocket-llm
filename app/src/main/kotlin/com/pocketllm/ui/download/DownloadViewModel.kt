@@ -7,6 +7,7 @@ import com.pocketllm.data.repo.SettingsRepository
 import com.pocketllm.domain.download.ModelSource
 import com.pocketllm.domain.download.RemoteGgufFile
 import com.pocketllm.util.FileUtils
+import com.pocketllm.util.logi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,7 +30,7 @@ class DownloadViewModel : ViewModel() {
         val progress: Map<String, Int> = emptyMap()
     )
 
-    /** 一键推荐模型（repoId 内的精确文件名） */
+    /** 一键推荐模型 */
     data class PrefabModel(
         val label: String,
         val repo: String,
@@ -76,6 +77,7 @@ class DownloadViewModel : ViewModel() {
     val listFiles: () -> Unit = {
         viewModelScope.launch {
             _ui.value = _ui.value.copy(loading = true, error = null, files = emptyList())
+            logi("DownloadVM: listing files for ${_ui.value.repoInput}")
             runCatching {
                 val src = container.sourceById(_ui.value.currentSourceId)
                 src.listGgufFiles(_ui.value.repoInput)
@@ -94,6 +96,7 @@ class DownloadViewModel : ViewModel() {
             val url = src.fileUrl(repoId, file.path)
             val destDir = FileUtils.modelsDir(container.appContext)
             val dest = File(destDir, file.path.substringAfterLast('/'))
+            logi("DownloadVM: $url -> ${dest.absolutePath}")
             runCatching {
                 container.downloadManager.download(url, dest) { p ->
                     _ui.value = _ui.value.copy(
@@ -105,6 +108,7 @@ class DownloadViewModel : ViewModel() {
                     filePath = dest.absolutePath,
                     name = dest.nameWithoutExtension
                 )
+                logi("DownloadVM: ${file.path} done")
             }.onFailure { e ->
                 _ui.value = _ui.value.copy(error = e.message)
             }
@@ -115,4 +119,6 @@ class DownloadViewModel : ViewModel() {
     fun downloadPrefab(p: PrefabModel) {
         download(p.repo, RemoteGgufFile(path = p.file, sizeBytes = 0, lastModified = ""))
     }
+
+    fun clearError() { _ui.value = _ui.value.copy(error = null) }
 }

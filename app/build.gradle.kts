@@ -20,7 +20,8 @@ android {
         versionName = "1.0.0"
 
         ndk {
-            abiFilters += listOf("arm64-v8a")   // 手机几乎都是 arm64；缩小体积只打这一个
+            // 手机几乎都是 arm64；缩小体积只打这一个
+            abiFilters += listOf("arm64-v8a")
         }
 
         externalNativeBuild {
@@ -95,8 +96,13 @@ android {
                 "META-INF/**.md",
                 "META-INF/LICENSE*",
                 "META-INF/NOTICE*",
+                "META-INF/*.kotlin_module",
                 "kotlin/**.kotlin_builtins",
-                "**/kotlin-tooling-metadata.json"
+                "**/kotlin-tooling-metadata.json",
+                "META-INF/INDEX.LIST",
+                "META-INF/io.netty.**",
+                "META-INF/versions/**",
+                "DebugProbesKt.bin"
             )
         }
         // 避免重复 jni 库
@@ -110,7 +116,6 @@ dependencies {
     // Compose BOM
     val composeBom = platform("androidx.compose:compose-bom:2024.09.02")
     implementation(composeBom)
-    androidTestImplementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.2")
@@ -122,6 +127,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    // extended 提供 Send/Stop/SmartToy/Bolt 等图标；BOM 已自动收敛版本
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.animation:animation")
 
@@ -140,7 +146,7 @@ dependencies {
 
     // Networking（下载源）
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    debugImplementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
@@ -149,13 +155,6 @@ dependencies {
 
     // WorkManager（断点续传、后台下载）
     implementation("androidx.work:work-runtime-ktx:2.9.1")
-
-    // Markdown 渲染
-    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.24.0")
-    implementation("com.mikepenz:multiplatform-markdown-renderer-coil3:0.24.0")
-
-    // Coil（图片）
-    implementation("io.coil-kt.coil3:coil-compose:3.0.0-rc01")
 
     // Splash
     implementation("androidx.core:core-splashscreen:1.0.1")

@@ -1,13 +1,12 @@
 package com.pocketllm
 
 import android.app.Application
-import android.content.Context
-import android.os.PowerManager
-import android.os.Build
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.pocketllm.di.AppContainer
-import com.pocketllm.util.ThermalMonitor
+import com.pocketllm.util.AppLogger
+import com.pocketllm.util.loge
+import com.pocketllm.util.logi
 
 class PocketLLMApp : Application(), Configuration.Provider {
 
@@ -15,17 +14,18 @@ class PocketLLMApp : Application(), Configuration.Provider {
         private set
 
     override fun onCreate() {
+        // 先初始化日志（写到 /sdcard/Android/data/com.pocketllm/files/pocketllm.log）
+        AppLogger.init(this)
+        logi("PocketLLM Application onCreate")
+
         installCrashLogger()
         super.onCreate()
         instance = this
         container = AppContainer(this)
 
-        // 启动热感知监控（异步、低功耗，只读不强制降温）
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        container.thermalMonitor.start()
-
-        // 初始化 WorkManager（用于断点续传下载）
-        WorkManager.initialize(this, workManagerConfiguration)
+        // 初始化 WorkManager（保留用于后续可能的真正后台下载实现）
+        runCatching { WorkManager.initialize(this, workManagerConfiguration) }
+            .onFailure { loge("WorkManager init failed", it) }
     }
 
     override val workManagerConfiguration: Configuration
@@ -33,14 +33,16 @@ class PocketLLMApp : Application(), Configuration.Provider {
             .setMinimumLoggingLevel(android.util.Log.INFO)
             .build()
 
-    /** 把未捕获异常堆栈写到 filesDir/crash.log，便于定位启动闪退。 */
+    /** 未捕获异常 → 文件 + logcat，便于用户反馈时定位 */
     private fun installCrashLogger() {
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             try {
                 val trace = android.util.Log.getStackTraceString(e)
-                val msg = "=== crash on ${java.util.Date()} thread=${t.name} ===\n$trace\n\n"
-                openFileOutput("crash.log", MODE_APPEND).bufferedWriter().use { it.write(msg) }
+                val msg = "=== crash on ${java.util.Date()} thread=${t.name} ===\n$trace\n"
+                AppLogger.log(android.util.Log.ERROR, "Crash", msg, e)
+                // 同时写到内部 filesDir（应用进程被杀也能保留）
+                openFileOutput("crash.log", MODE_APPEND).bufferedWriter().use { it.write(msg + "\n") }
             } catch (_: Throwable) {}
             prev?.uncaughtException(t, e)
         }

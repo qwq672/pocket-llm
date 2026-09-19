@@ -21,6 +21,7 @@ import kotlinx.coroutines.withContext
  * - 维护当前 Backend 实例，按 [InferenceConfig.backend] 切换。
  * - 把 [MemoryOptimizer] 与 [ThermalGovernor] 注入到当前 Backend。
  * - 暴露 stats 流，UI 实时显示。
+ * - 当请求的后端不可用时自动回退到 CPU，避免静默加载失败。
  *
  * 单例，App 生命周期内唯一。线程安全。
  */
@@ -41,42 +42,50 @@ class InferenceEngine(
     private val memoryOptimizer = MemoryOptimizer(nativeBridge)
     private val thermalGovernor = ThermalGovernor(thermalMonitor)
 
-    private var currentBackend: Backend? = null
-    private var currentModelPath: String? = null
+    @Volatile private var currentBackend: Backend? = null
+    @Volatile private var currentModelPath: String? = null
+    @Volatile private var effectiveBackend: BackendType = BackendType.CPU
 
     /** 切换后端 + 加载模型。已加载相同后端则只更新 config。 */
     suspend fun loadModel(modelPath: String, config: InferenceConfig): Result<Unit> = withContext(Dispatchers.Default) {
         mutex.withLock {
             runCatching {
-                // 1. 内存预热（避免大块 malloc 触发 mmap 抖动）
-                memoryOptimizer.warmup(config)
+                // 1. 先检查后端可用性，必要时回退到 CPU
+                var backendType = config.backend
+                if (!isBackendAvailable(backendType)) {
+                    Log.w("InferenceEngine",
+                        "backend ${config.backend} unavailable (not built or device lacks support), falling back to CPU")
+                    backendType = BackendType.CPU
+                }
 
-                // 2. 若后端类型变了，先卸载旧的
-                val needSwitch = currentBackend?.type != config.backend || currentModelPath != modelPath
+                // 2. 若后端/模型变了，先卸载旧的并创建新的
+                val needSwitch = currentBackend?.type != backendType || currentModelPath != modelPath
                 if (needSwitch) {
                     currentBackend?.close()
-                    currentBackend = createBackend(config.backend)
+                    currentBackend = createBackend(backendType)
                 }
 
                 val backend = currentBackend ?: error("backend null")
-                if (!backend.isAvailable()) {
-                    error("后端 ${config.backend} 不可用（设备不支持或 .so 未加载）")
-                }
+                if (!backend.isAvailable()) error("后端 ${backend.type} 不可用")
 
                 // 3. 注入热档策略
                 val tuned = thermalGovernor.tuneConfig(config)
 
+                // 4. 加载（C++ 侧会做 mmap + warmup 内存池）
                 val ok = backend.load(modelPath, tuned)
-                if (!ok) error("加载失败：${modelPath}")
+                if (!ok) error("加载失败：$modelPath")
 
                 currentModelPath = modelPath
+                effectiveBackend = backend.type
                 _state.value = _state.value.copy(
                     loaded = true,
                     modelPath = modelPath,
-                    backend = config.backend,
-                    config = tuned
+                    backend = backend.type,
+                    config = tuned,
+                    error = null
                 )
-                Log.i("InferenceEngine", "loaded ${modelPath.substringAfterLast('/')} via ${config.backend}")
+                Log.i("InferenceEngine",
+                    "loaded ${modelPath.substringAfterLast('/')} via ${backend.type}")
                 Unit
             }.onFailure {
                 Log.e("InferenceEngine", "load failed", it)
@@ -93,9 +102,14 @@ class InferenceEngine(
         val backend = currentBackend ?: run {
             onStop("no_model"); return
         }
-        // 推理前再检查一次热档位，必要时降级
+        if (!backend.isLoaded()) { onStop("no_model"); return }
         thermalGovernor.beforeCompletion(backend)
-        backend.completion(prompt, onToken, onStop)
+        try {
+            backend.completion(prompt, onToken, onStop)
+        } catch (t: Throwable) {
+            Log.e("InferenceEngine", "completion threw", t)
+            onStop("exception: ${t.message ?: t.javaClass.simpleName}")
+        }
     }
 
     fun interrupt() {
@@ -117,7 +131,10 @@ class InferenceEngine(
                 val b = currentBackend
                 if (b != null && b.isLoaded()) {
                     val s = b.stats()
-                    _stats.value = s.copy(thermalPercent = thermalMonitor.thermalPercent())
+                    _stats.value = s.copy(
+                        thermalPercent = thermalMonitor.thermalPercent(),
+                        backend = effectiveBackend
+                    )
                 }
                 kotlinx.coroutines.delay(1000)
             }
@@ -129,6 +146,14 @@ class InferenceEngine(
         BackendType.VULKAN -> VulkanBackend(nativeBridge, memoryOptimizer, thermalGovernor, cpuInfo)
         BackendType.NPU    -> NpuBackend(nativeBridge, memoryOptimizer, thermalGovernor, cpuInfo)
         BackendType.OPENCL -> OpenClBackend(nativeBridge, memoryOptimizer, thermalGovernor, cpuInfo)
+    }
+
+    /** 探测某后端在当前设备/构建下是否可用（不创建实例，避免资源泄漏） */
+    private fun isBackendAvailable(type: BackendType): Boolean = when (type) {
+        BackendType.CPU    -> true
+        BackendType.VULKAN -> runCatching { nativeBridge.vulkanAvailable() }.getOrDefault(false)
+        BackendType.NPU    -> runCatching { nativeBridge.npuAvailable() }.getOrDefault(false)
+        BackendType.OPENCL -> runCatching { nativeBridge.openclAvailable() }.getOrDefault(false)
     }
 }
 

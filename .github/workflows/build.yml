@@ -21,7 +21,7 @@ jobs:
   build:
     name: Assemble arm64-v8a Release APK
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       NDK_VERSION: 26.1.10909125
       CMAKE_VERSION: 3.22.1
@@ -36,9 +36,8 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK + Vulkan SDK
         run: |
-          # ubuntu-latest 已预装 cmdline-tools；定位它并加入 PATH
           ANDROID_HOME=/usr/local/lib/android/sdk
           export ANDROID_HOME ANDROID_SDK_ROOT=$ANDROID_HOME
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
@@ -66,10 +65,13 @@ jobs:
             app/.cxx
           key: gradle-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
 
-      - name: Build release APK (CPU-only arm64-v8a)
+      - name: Build release APK (CPU + Vulkan + OpenCL, arm64-v8a)
         run: |
           chmod +x ./gradlew
-          ./gradlew :app:assembleRelease --stacktrace --no-daemon
+          # 启用 Vulkan 与 OpenCL 后端；NPU 需要高通 QNN SDK（私有），CI 不开。
+          # 这两个 backend 在没有 GPU 的设备上会被运行时自动回退到 CPU。
+          ./gradlew :app:assembleRelease --stacktrace --no-daemon \
+            -Pandroid.externalNativeBuild.cmake.arguments="-DPOCKET_VULKAN=ON,-DPOCKET_OPENCL=ON"
 
       - name: Rename and collect APK
         run: |

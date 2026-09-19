@@ -8,6 +8,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
@@ -19,37 +20,36 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
-import com.pocketllm.PocketLLMApp
 import com.pocketllm.R
 import com.pocketllm.ui.chat.ChatScreen
+import com.pocketllm.ui.download.DownloadScreen
 import com.pocketllm.ui.models.ModelsScreen
 import com.pocketllm.ui.settings.SettingsScreen
 
 sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     data object Chat     : Dest("chat",     R.string.nav_chat,     Icons.Outlined.ChatBubbleOutline)
     data object Models   : Dest("models",   R.string.nav_models,   Icons.Outlined.Memory)
+    data object Download : Dest("download", R.string.nav_download, Icons.Outlined.CloudDownload)
     data object Settings : Dest("settings", R.string.nav_settings, Icons.Outlined.Settings)
 }
 
-private val bottomNav = listOf(Dest.Chat, Dest.Models, Dest.Settings)
+private val bottomNav = listOf(Dest.Chat, Dest.Models, Dest.Download, Dest.Settings)
 
 @Composable
 fun AppNav() {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
+    val routes = bottomNav.map { it.route }
 
     Scaffold(
         bottomBar = {
-            if (currentRoute in bottomNav.map { it.route }) {
+            if (currentRoute in routes) {
                 NavigationBar {
                     bottomNav.forEach { d ->
                         NavigationBarItem(
@@ -73,11 +73,18 @@ fun AppNav() {
             navController = nav,
             startDestination = Dest.Chat.route,
             modifier = Modifier.padding(inner),
-            enterTransition = { fadeIn(tween(200)) },
-            exitTransition = { fadeOut(tween(200)) }
+            enterTransition = {
+                fadeIn(tween(200)) + slideInHorizontally(tween(200)) { it / 12 }
+            },
+            exitTransition = { fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { -it / 12 } },
+            popEnterTransition = {
+                fadeIn(tween(200)) + slideInHorizontally(tween(200)) { -it / 12 }
+            },
+            popExitTransition = { fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { it / 12 } }
         ) {
             composable(Dest.Chat.route)     { ChatScreen() }
             composable(Dest.Models.route)   { ModelsScreen() }
+            composable(Dest.Download.route) { DownloadScreen() }
             composable(Dest.Settings.route) { SettingsScreen() }
         }
     }

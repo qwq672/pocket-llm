@@ -157,6 +157,13 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                 onCheckedChange = { vm.update(cfg.copy(autoLoadModel = it)) }
             )
 
+            // ===== 系统提示词 =====
+            Section("对话")
+            SystemPromptEditor(
+                value = cfg.systemPrompt,
+                onValueChange = { vm.update(cfg.copy(systemPrompt = it)) }
+            )
+
             // ===== 关于 =====
             Section("关于")
             Card(
@@ -233,5 +240,24 @@ private fun KvQuantSelector(selected: String, onSelect: (String) -> Unit) {
                 label = { Text(label) }
             )
         }
+    }
+}
+
+@Composable
+private fun SystemPromptEditor(value: String, onValueChange: (String) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("系统提示词（System Prompt）") },
+            placeholder = { Text("例：你是一个严谨的助手，用中文简洁回答。留空则不附加。") },
+            minLines = 2,
+            maxLines = 5
+        )
     }
 }

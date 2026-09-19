@@ -30,6 +30,7 @@ class SettingsRepository(private val context: Context) {
         val TOP_P           = stringPreferencesKey("top_p")
         val REPEAT_PENALTY  = stringPreferencesKey("repeat_penalty")
         val AUTO_LOAD       = booleanPreferencesKey("auto_load")
+        val SYSTEM_PROMPT   = stringPreferencesKey("system_prompt")
         val DOWNLOAD_SOURCE = stringPreferencesKey("dl_source")
         val LANGUAGE        = stringPreferencesKey("lang")
         val LAST_MODEL_ID   = intPreferencesKey("last_model_id")
@@ -49,7 +50,8 @@ class SettingsRepository(private val context: Context) {
             topK = p[Keys.TOP_K] ?: 40,
             topP = (p[Keys.TOP_P] ?: "0.95").toFloat(),
             repeatPenalty = (p[Keys.REPEAT_PENALTY] ?: "1.1").toFloat(),
-            autoLoadModel = p[Keys.AUTO_LOAD] ?: false
+            autoLoadModel = p[Keys.AUTO_LOAD] ?: false,
+            systemPrompt = p[Keys.SYSTEM_PROMPT] ?: ""
         )
     }
 
@@ -72,6 +74,7 @@ class SettingsRepository(private val context: Context) {
             p[Keys.TOP_P] = c.topP.toString()
             p[Keys.REPEAT_PENALTY] = c.repeatPenalty.toString()
             p[Keys.AUTO_LOAD] = c.autoLoadModel
+            p[Keys.SYSTEM_PROMPT] = c.systemPrompt
         }
     }
 

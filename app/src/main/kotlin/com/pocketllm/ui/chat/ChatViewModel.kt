@@ -34,7 +34,13 @@ class ChatViewModel : ViewModel() {
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
+    @Volatile private var systemPrompt: String = ""
+
     init {
+        // 监听用户设置里的系统提示词
+        viewModelScope.launch {
+            settings.config.collectLatest { systemPrompt = it.systemPrompt }
+        }
         // 监听 engine stats
         viewModelScope.launch {
             engine.stats.collectLatest { s ->
@@ -103,6 +109,9 @@ class ChatViewModel : ViewModel() {
     /** 简化版 prompt 模板，实际可按 model arch 选用 chat template */
     private fun buildPrompt(msgs: List<ChatMessage>): String {
         val sb = StringBuilder()
+        if (systemPrompt.isNotBlank()) {
+            sb.append("System: ").append(systemPrompt.trim()).append("\n\n")
+        }
         for (m in msgs) {
             when (m.role) {
                 "user"      -> sb.append("User: ").append(m.content).append("\n")

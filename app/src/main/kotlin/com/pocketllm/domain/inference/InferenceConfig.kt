@@ -34,7 +34,8 @@ data class InferenceConfig(
     val topK: Int = 40,
     val topP: Float = 0.95f,
     val repeatPenalty: Float = 1.1f,
-    val autoLoadModel: Boolean = false
+    val autoLoadModel: Boolean = false,
+    val systemPrompt: String = ""
 ) {
     fun effectiveThreads(bigCores: Int): Int = if (cpuThreads <= 0) bigCores.coerceIn(2, 8) else cpuThreads
 }

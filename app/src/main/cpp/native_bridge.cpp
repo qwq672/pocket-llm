@@ -1,11 +1,13 @@
 // native_bridge.cpp —— JNI 入口，桥接 llama.cpp 与 Java 侧 NativeBridge
 //
 // 设计要点（内存优化）：
-// 1. 模型用 mmap 加载（llama.cpp 默认就是 mmap，确认不传 LLAMA_FILE_NO_MMAP）
-// 2. KV cache 量化通过 llama_kv_cache_quantize / kv quant type 设置
+// 1. 模型用 mmap 加载（llama.cpp 0.4.x 默认即 mmap，已无 use_mmap 开关）
+// 2. KV cache 量化通过 context_params.type_k/type_v 设置
 // 3. compute buffer 池化（memory_pool.cpp 管理）
 // 4. token 回调直接通过 JNI Ref 向上回，避免拷贝大字符串
 // 5. completion 在专用线程上跑，主线程不阻塞
+//
+// 本文件已对齐 llama.cpp 0.4.1 的新 API（vocab 句柄化、采样器/模型加载新接口）。
 
 #include <jni.h>
 #include <android/log.h>
@@ -28,11 +30,14 @@
 
 // ---------- 全局状态 ----------
 static std::mutex g_mutex;
-static llama_model*  g_model  = nullptr;
-static llama_context* g_ctx   = nullptr;
+static llama_model*     g_model  = nullptr;
+static llama_context*   g_ctx    = nullptr;
+static const llama_vocab* g_vocab = nullptr;
 static std::atomic<bool> g_interrupt{false};
 static std::thread g_gen_thread;
 static std::atomic<bool> g_running{false};
+// 0.4.x 移除了 llama_get_kv_cache_token_count，这里自行维护已用 token 数
+static std::atomic<int> g_ctx_used{0};
 
 static JavaVM* g_vm = nullptr;
 static jobject g_ref_obj = nullptr;   // 全局 ref，给 callback 用
@@ -58,7 +63,7 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_pocketllm_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
 #if defined(POCKET_NPU)
     // 探测 QNN HTP / 联发科 APU
-    void* h1 = dlopen("libQnnHtp.so",     RTLD_NOW | RTLD_LOCAL);
+    void* h1 = dlopen("libQnnHtp.so",          RTLD_NOW | RTLD_LOCAL);
     void* h2 = dlopen("libhexagon_nn_skel.so", RTLD_NOW | RTLD_LOCAL);
     void* h3 = dlopen("libneuron_adapter.so",  RTLD_NOW | RTLD_LOCAL);
     if (h1) { dlclose(h1); return JNI_TRUE; }
@@ -97,25 +102,28 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaLoad(
     g_backend_str = backend;
 
     std::lock_guard<std::mutex> lk(g_mutex);
-    if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
-    if (g_model) { llama_free_model(g_model); g_model = nullptr; }
+    if (g_ctx)   { llama_free(g_ctx); g_ctx = nullptr; }
+    if (g_model) { llama_model_free(g_model); g_model = nullptr; }
+    g_vocab = nullptr;
+    g_ctx_used.store(0);
 
     llama_backend_init();
 
     llama_model_params mp = llama_model_default_params();
     mp.n_gpu_layers = nGpuLayers;
-    // 关键：mmap 加载，避免整份权重进 page cache 反复 evict 抖动
-    mp.use_mmap = true;
-    mp.use_mlock = false;
+    // 0.4.x：mmap 为默认行为，use_mmap/use_mlock 字段已移除，无需设置
 
-    g_model = llama_load_model_from_file(path, mp);
+    g_model = llama_model_load_from_file(path, mp);
     if (!g_model) {
-        LOGE("llama_load_model_from_file failed: %s", path);
+        LOGE("llama_model_load_from_file failed: %s", path);
         env->ReleaseStringUTFChars(jpath, path);
         env->ReleaseStringUTFChars(jbackend, backend);
         env->ReleaseStringUTFChars(jkvq, kvq);
         return JNI_FALSE;
     }
+
+    g_vocab = llama_model_get_vocab(g_model);
+    bridge_set_vocab(g_vocab);
 
     llama_context_params cp = llama_context_default_params();
     cp.n_ctx        = ctxLen;
@@ -123,7 +131,7 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaLoad(
     cp.n_ubatch     = physicalBatch;   // 物理 batch
     cp.n_threads    = threads > 0 ? threads : 4;
     cp.n_threads_batch = threads > 0 ? threads : 4;
-    cp.flash_attn   = true;            // FlashAttention：内存带宽 -50%
+    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;  // FlashAttention：内存带宽 -50%
     cp.no_perf      = false;
 
     // KV cache 量化
@@ -131,10 +139,11 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaLoad(
     else if (std::string(kvq) == "q4_0") cp.type_k = cp.type_v = GGML_TYPE_Q4_0;
     else                                 cp.type_k = cp.type_v = GGML_TYPE_F16;
 
-    g_ctx = llama_new_context_with_model(g_model, cp);
+    g_ctx = llama_init_from_model(g_model, cp);
     if (!g_ctx) {
-        LOGE("llama_new_context_with_model failed");
-        llama_free_model(g_model); g_model = nullptr;
+        LOGE("llama_init_from_model failed");
+        llama_model_free(g_model); g_model = nullptr;
+        g_vocab = nullptr; bridge_set_vocab(nullptr);
         env->ReleaseStringUTFChars(jpath, path);
         env->ReleaseStringUTFChars(jbackend, backend);
         env->ReleaseStringUTFChars(jkvq, kvq);
@@ -155,7 +164,10 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_pocketllm_infra_jni_NativeBridge_llamaUnload(JNIEnv*, jclass) {
     std::lock_guard<std::mutex> lk(g_mutex);
     if (g_ctx)   { llama_free(g_ctx); g_ctx = nullptr; }
-    if (g_model) { llama_free_model(g_model); g_model = nullptr; }
+    if (g_model) { llama_model_free(g_model); g_model = nullptr; }
+    g_vocab = nullptr;
+    bridge_set_vocab(nullptr);
+    g_ctx_used.store(0);
     g_pool.releaseAll();
     LOGI("unloaded");
 }
@@ -197,7 +209,7 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
     JNIEnv* env, jclass, jstring jprompt,
     jobject tokenCb, jobject stopCb)
 {
-    if (!g_ctx || !g_model) {
+    if (!g_ctx || !g_model || !g_vocab) {
         call_stop_cb(env, stopCb, "no_model");
         return;
     }
@@ -206,10 +218,22 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
 
     g_interrupt.store(false);
     g_running.store(true);
+    g_ctx_used.store(0);
 
-    // tokenize
-    std::vector<llama_token> tokens = ::llama_tokenize(g_model, sp, true, true);
-    const int maxCtx = llama_n_ctx(g_ctx);
+    // tokenize（0.4.x：先测长度再分配，vocab 句柄化）
+    std::vector<llama_token> tokens;
+    {
+        int32_t n = llama_tokenize(g_vocab, sp.c_str(), (int32_t)sp.size(),
+                                   nullptr, 0, true, true);
+        if (n < 0) n = -n; // 返回值为需要的 buffer 大小
+        tokens.resize((size_t)n);
+        int32_t actual = llama_tokenize(g_vocab, sp.c_str(), (int32_t)sp.size(),
+                                        tokens.data(), n, true, true);
+        if (actual < 0) actual = -actual;
+        tokens.resize((size_t)actual);
+    }
+
+    const int maxCtx = (int)llama_n_ctx(g_ctx);
     if ((int)tokens.size() > maxCtx - 4) {
         // 截断保留最近
         tokens.erase(tokens.begin(), tokens.end() - (maxCtx - 4));
@@ -225,17 +249,21 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
             goto done;
         }
         n_past += n;
+        g_ctx_used.store(n_past);
         if (g_interrupt.load()) { call_stop_cb(env, stopCb, "interrupted"); goto done; }
     }
 
     // 2. generation 阶段：逐 token
     {
         llama_sampler* s = bridge_build_sampler();
+        char piece_buf[256];
         for (int i = 0; i < 2048; i++) {
             if (g_interrupt.load()) { call_stop_cb(env, stopCb, "interrupted"); break; }
             llama_token id = llama_sampler_sample(s, g_ctx, -1);
-            if (llama_token_is_eog(g_model, id)) { call_stop_cb(env, stopCb, "stop"); break; }
-            std::string piece = llama_token_to_piece(g_ctx, id);
+            if (llama_vocab_is_eog(g_vocab, id)) { call_stop_cb(env, stopCb, "stop"); break; }
+
+            int r = llama_token_to_piece(g_vocab, id, piece_buf, sizeof(piece_buf), 0, true);
+            std::string piece(r > 0 ? piece_buf : "", r > 0 ? (size_t)r : 0);
             call_token_cb(env, tokenCb, piece);
 
             llama_batch batch = llama_batch_get_one(&id, 1);
@@ -243,6 +271,7 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
                 call_stop_cb(env, stopCb, "decode_failed"); break;
             }
             n_past++;
+            g_ctx_used.store(n_past);
             if (n_past >= maxCtx - 1) { call_stop_cb(env, stopCb, "length"); break; }
         }
         llama_sampler_free(s);
@@ -262,13 +291,14 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaInterrupt(JNIEnv*, jclass) {
 extern "C" JNIEXPORT jfloat JNICALL
 Java_com_pocketllm_infra_jni_NativeBridge_llamaTokensPerSecond(JNIEnv*, jclass) {
     if (!g_ctx) return 0.f;
-    return (jfloat)llama_perf_context(g_ctx)->t_eval;
+    auto pd = llama_perf_context(g_ctx);
+    if (pd.t_eval_ms <= 0.0 || pd.n_eval <= 0) return 0.f;
+    return (jfloat)(pd.n_eval / (pd.t_eval_ms / 1000.0));
 }
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_pocketllm_infra_jni_NativeBridge_llamaContextUsed(JNIEnv*, jclass) {
-    if (!g_ctx) return 0;
-    return (jint)llama_get_kv_cache_token_count(g_ctx);
+    return (jint)g_ctx_used.load();
 }
 
 extern "C" JNIEXPORT jint JNICALL

@@ -9,6 +9,11 @@ struct bridge_sampler_t {
     float repeat_penalty;
 };
 
-void                bridge_set_sampler(const bridge_sampler_t& s);
+struct llama_sampler;
+struct llama_vocab;
+
+void                  bridge_set_sampler(const bridge_sampler_t& s);
+// 由 native_bridge 在 load 模型后注入 vocab，采样器需要它来分配 logits buffer
+void                  bridge_set_vocab(const struct llama_vocab* vocab);
 struct llama_sampler* bridge_build_sampler();
-int                 bridge_read_thermal_percent();
+int                   bridge_read_thermal_percent();

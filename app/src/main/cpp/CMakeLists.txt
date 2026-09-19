@@ -22,9 +22,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 
 # ----- 选项 -----
-option(POCKET_VULKAN  "Enable Vulkan backend"  ON)
-option(POCKET_OPENCL  "Enable OpenCL backend"  ON)
-option(POCKET_NPU     "Enable NPU (HexaGen) backend" ON)
+# 默认 CPU-only，保证 GitHub Actions（无 GPU SDK / QNN SDK）可直接出包。
+# 本地真机需要 GPU/NPU 时，在 gradle 命令加：
+#   -DPOCKET_VULKAN=ON （需 Vulkan SDK + shaderc/glslc）
+#   -DPOCKET_OPENCL=ON
+#   -DPOCKET_NPU=ON    （需高通 QNN SDK）
+option(POCKET_VULKAN  "Enable Vulkan backend"  OFF)
+option(POCKET_OPENCL  "Enable OpenCL backend"  OFF)
+option(POCKET_NPU     "Enable NPU (HexaGen) backend" OFF)
 
 # ----- 第三方源码目录 -----
 # llama.cpp 源码（含 ggml + ggml-hexagon）：放到 app/src/main/cpp/llama.cpp

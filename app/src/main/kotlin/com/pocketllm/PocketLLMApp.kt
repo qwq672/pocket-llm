@@ -15,6 +15,7 @@ class PocketLLMApp : Application(), Configuration.Provider {
         private set
 
     override fun onCreate() {
+        installCrashLogger()
         super.onCreate()
         instance = this
         container = AppContainer(this)
@@ -31,6 +32,19 @@ class PocketLLMApp : Application(), Configuration.Provider {
         get() = Configuration.Builder()
             .setMinimumLoggingLevel(android.util.Log.INFO)
             .build()
+
+    /** 把未捕获异常堆栈写到 filesDir/crash.log，便于定位启动闪退。 */
+    private fun installCrashLogger() {
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val trace = android.util.Log.getStackTraceString(e)
+                val msg = "=== crash on ${java.util.Date()} thread=${t.name} ===\n$trace\n\n"
+                openFileOutput("crash.log", MODE_APPEND).bufferedWriter().use { it.write(msg) }
+            } catch (_: Throwable) {}
+            prev?.uncaughtException(t, e)
+        }
+    }
 
     companion object {
         @Volatile lateinit var instance: PocketLLMApp

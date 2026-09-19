@@ -68,8 +68,9 @@ android {
     // 资源压缩 + 代码混淆，缩小体积
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // 临时关闭 R8/资源收缩以排除启动闪退；确认稳定后再开。
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

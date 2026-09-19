@@ -13,6 +13,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <dlfcn.h>
+#include <cstdarg>
 #include <string>
 #include <vector>
 #include <memory>
@@ -24,8 +25,46 @@
 #include "bridge.h"
 
 #define TAG "PocketLLM-Native"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+// 双路日志：__android_log_print + 通过 JNI 回调传给 Kotlin AppLogger 写文件。
+// native_log_cb 由 setNativeLogCallback 注入；如果未注册则只走 logcat。
+static jobject g_log_cb = nullptr;       // 全局 ref to Kotlin lambda
+static jmethodID g_log_cb_mid = nullptr; // Function3.invoke 的 jmethodID
+static jclass    g_log_cls = nullptr;    // Kotlin NativeBridge companion for onNativeLog
+static jmethodID g_on_native_log_mid = nullptr;
+
+static void native_log(int priority, const char* tag, const char* fmt, ...) {
+    char buf[1024];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    __android_log_print(priority, tag, "%s", buf);
+
+    // 通过 JNI 回调到 Kotlin NativeBridge.onNativeLog
+    if (g_vm) {
+        JNIEnv* env = nullptr;
+        bool attached = false;
+        if (g_vm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_OK) {
+            // 当前线程已 attach
+        } else if (g_vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+            attached = true;
+        }
+        if (env && g_log_cls && g_on_native_log_mid) {
+            jstring jtag = env->NewStringUTF(tag);
+            jstring jmsg  = env->NewStringUTF(buf);
+            env->CallStaticVoidMethod(g_log_cls, g_on_native_log_mid,
+                                      (jint)priority, jtag, jmsg);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (jtag) env->DeleteLocalRef(jtag);
+            if (jmsg)  env->DeleteLocalRef(jmsg);
+        }
+        if (attached) g_vm->DetachCurrentThread();
+    }
+}
+
+#define LOGI(...) native_log(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
+#define LOGE(...) native_log(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 // ---------- llama.cpp 0.4.x 兼容层 ----------
 #define POCKET_SET_FLASH_ATTN(cp) (cp).flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED
@@ -240,20 +279,24 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
     jobject tokenCb, jobject stopCb)
 {
     if (!g_ctx || !g_model || !g_vocab) {
+        LOGE("llamaCompletion: no_model");
         call_string_cb(env, stopCb, "no_model");
         return;
     }
     if (!jprompt) {
+        LOGE("llamaCompletion: empty_prompt");
         call_string_cb(env, stopCb, "empty_prompt");
         return;
     }
 
     const char* prompt = env->GetStringUTFChars(jprompt, nullptr);
     if (!prompt) {
+        LOGE("llamaCompletion: GetStringUTFChars failed");
         call_string_cb(env, stopCb, "oom");
         return;
     }
     std::string sp(prompt);
+    LOGI("llamaCompletion: prompt_len=%zu  ctx=%p", sp.size(), (void*)g_ctx);
 
     // 锁住全局状态，避免 unload 与生成并发
     std::lock_guard<std::mutex> lk(g_mutex);
@@ -262,8 +305,16 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
     g_interrupt.store(false);
     g_ctx_used.store(0);
 
-    // 清空 KV cache，确保每条消息从干净状态开始
-    if (g_ctx) POCKET_KV_CLEAR(g_ctx);
+    // 清空 KV cache（v0.4.1 用 llama_memory_clear）
+    if (g_ctx) {
+        llama_memory_t mem = llama_get_memory(g_ctx);
+        if (mem) {
+            llama_memory_clear(mem, true);
+            LOGI("llamaCompletion: KV cleared");
+        } else {
+            LOGE("llamaCompletion: llama_get_memory returned null, KV not cleared");
+        }
+    }
 
     // tokenize
     std::vector<llama_token> tokens;
@@ -277,6 +328,7 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
         if (actual < 0) actual = -actual;
         tokens.resize((size_t)actual);
     }
+    LOGI("llamaCompletion: tokens=%zu", tokens.size());
     if (tokens.empty()) {
         call_string_cb(env, stopCb, "empty_tokens");
         return;
@@ -292,44 +344,55 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
 
     // 1. prompt 阶段：分批 eval
     int n_past = 0;
+    LOGI("llamaCompletion: prompt eval begin");
     for (size_t i = 0; i < tokens.size(); i += 256) {
         if (g_interrupt.load()) { stop_reason = "interrupted"; stopped = true; break; }
         int n = std::min((int)256, (int)(tokens.size() - i));
         llama_batch batch = llama_batch_get_one(&tokens[i], n);
-        if (llama_decode(g_ctx, batch) != 0) {
+        int rc = llama_decode(g_ctx, batch);
+        if (rc != 0) {
+            LOGE("llamaCompletion: prompt decode failed rc=%d at i=%zu", rc, i);
             stop_reason = "decode_failed"; stopped = true; break;
         }
         n_past += n;
         g_ctx_used.store(n_past);
     }
+    LOGI("llamaCompletion: prompt eval done, n_past=%d", n_past);
 
     // 2. generation 阶段
     if (!stopped) {
         llama_sampler* s = bridge_build_sampler();
         char piece_buf[256];
+        int gen_count = 0;
+        LOGI("llamaCompletion: generation begin (max 2048 tokens)");
         for (int i = 0; i < 2048; i++) {
             if (g_interrupt.load()) { stop_reason = "interrupted"; break; }
             llama_token id = llama_sampler_sample(s, g_ctx, -1);
-            if (llama_vocab_is_eog(g_vocab, id)) { stop_reason = "stop"; break; }
+            if (llama_vocab_is_eog(g_vocab, id)) { stop_reason = "stop"; LOGI("llamaCompletion: EOG at i=%d", i); break; }
 
             int r = llama_token_to_piece(g_vocab, id, piece_buf, sizeof(piece_buf), 0, true);
             std::string piece(r > 0 ? piece_buf : "", r > 0 ? (size_t)r : 0);
             if (!call_string_cb(env, tokenCb, piece)) {
+                LOGE("llamaCompletion: token callback failed at i=%d", i);
                 stop_reason = "callback_error"; break;
             }
+            gen_count++;
 
             llama_batch batch = llama_batch_get_one(&id, 1);
             if (llama_decode(g_ctx, batch) != 0) {
+                LOGE("llamaCompletion: gen decode failed at i=%d", i);
                 stop_reason = "decode_failed"; break;
             }
             n_past++;
             g_ctx_used.store(n_past);
             if (n_past >= maxCtx - 1) { stop_reason = "length"; break; }
         }
+        LOGI("llamaCompletion: generation done, generated=%d reason=%s", gen_count, stop_reason.c_str());
         llama_sampler_free(s);
     }
 
     // 最终回调 stop
+    LOGI("llamaCompletion: calling stop_cb reason=%s", stop_reason.c_str());
     call_string_cb(env, stopCb, stop_reason);
 }
 
@@ -395,6 +458,21 @@ Java_com_pocketllm_infra_jni_NativeBridge_thermalPercent(JNIEnv*, jclass) {
     return (jint)bridge_read_thermal_percent();
 }
 
+// ---------- native log callback ----------
+extern "C" JNIEXPORT void JNICALL
+Java_com_pocketllm_infra_jni_NativeBridge_setNativeLogCallback(
+    JNIEnv* env, jclass, jobject callback)
+{
+    // 释放旧的
+    if (g_log_cb) {
+        env->DeleteGlobalRef(g_log_cb);
+        g_log_cb = nullptr;
+    }
+    if (callback) {
+        g_log_cb = env->NewGlobalRef(callback);
+    }
+}
+
 // ---------- JNI_OnLoad ----------
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     g_vm = vm;
@@ -402,5 +480,21 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     if (vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_VERSION_1_6;
     // 在主线程的 ClassLoader 上下文中缓存 Function1.invoke
     ensure_cb_cache(env);
+    // 缓存 NativeBridge.onNativeLog 静态方法用于 native_log 回调
+    jclass local = env->FindClass("com/pocketllm/infra/jni/NativeBridge");
+    if (local && !env->ExceptionCheck()) {
+        g_log_cls = (jclass) env->NewGlobalRef(local);
+        env->DeleteLocalRef(local);
+        g_on_native_log_mid = env->GetStaticMethodID(g_log_cls, "onNativeLog",
+            "(ILjava/lang/String;Ljava/lang/String;)V");
+        if (!g_on_native_log_mid || env->ExceptionCheck()) {
+            env->ExceptionClear();
+            LOGE("JNI_OnLoad: cannot find NativeBridge.onNativeLog");
+            g_on_native_log_mid = nullptr;
+        }
+    } else {
+        env->ExceptionClear();
+        LOGE("JNI_OnLoad: cannot find NativeBridge class");
+    }
     return JNI_VERSION_1_6;
 }

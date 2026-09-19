@@ -76,4 +76,25 @@ class NativeBridge {
 
     // -------- 热感知 --------
     external fun thermalPercent(): Int
+
+    /**
+     * 注册 native 侧日志回调。C++ 内部的 LOGI/LOGE 会通过此回调传给 Kotlin 写文件。
+     * 传 null 取消注册。回调在 native 调用线程上同步执行，请勿在其中再做 JNI 反向调用。
+     */
+    external fun setNativeLogCallback(callback: ((level: Int, tag: String, msg: String) -> Unit)?)
+
+    companion object {
+        @Volatile private var logHandler: ((Int, String, String) -> Unit)? = null
+
+        /** 由 native 侧通过 JNI 调用，把日志传到 Kotlin AppLogger。 */
+        @JvmStatic
+        fun onNativeLog(level: Int, tag: String, msg: String) {
+            logHandler?.invoke(level, tag, msg)
+        }
+
+        /** 由 PocketLLMApp 注册实际写入文件的 handler。 */
+        fun setLogHandler(h: ((Int, String, String) -> Unit)?) {
+            logHandler = h
+        }
+    }
 }

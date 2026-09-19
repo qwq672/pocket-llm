@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import android.content.ContextWrapper
 
 private val LightColors = lightColorScheme(
     primary = md_light_primary,
@@ -58,7 +59,15 @@ fun PocketLLMTheme(
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
-            val window = (view.context as android.app.Activity).window
+            // view.context 不一定是 Activity（可能是 ContextThemeWrapper 等包装类），
+            // 直接 as Activity 在某些场景会抛 ClassCastException，导致启动闪退。
+            var ctx = view.context
+            while (ctx is ContextWrapper) {
+                if (ctx is android.app.Activity) break
+                ctx = ctx.baseContext
+            }
+            val activity = ctx as? android.app.Activity ?: return@SideEffect
+            val window = activity.window
             window.statusBarColor = colorScheme.background.toArgb()
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
         }

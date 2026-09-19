@@ -61,11 +61,18 @@ jobject MemoryPool::borrow_direct(JNIEnv* env, int size) {
     std::lock_guard<std::mutex> lk(m_mutex);
     // 简化：每次新分配。实际可按 size 分桶复用。
     m_last_use_ms = now_ms();
-    return env->NewDirectByteBuffer(std::malloc(size), size);
+    if (size <= 0) return nullptr;
+    void* p = std::malloc((size_t)size);
+    if (!p) {
+        LOGI("borrow_direct: malloc(%d) returned null (OOM)", size);
+        return nullptr;
+    }
+    return env->NewDirectByteBuffer(p, (jlong)size);
 }
 
 void MemoryPool::return_direct(JNIEnv* env, jobject buf) {
     std::lock_guard<std::mutex> lk(m_mutex);
+    if (!buf) return;
     void* addr = env->GetDirectBufferAddress(buf);
     if (addr) std::free(addr);
     env->DeleteLocalRef(buf);

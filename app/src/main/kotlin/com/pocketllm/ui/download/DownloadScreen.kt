@@ -67,7 +67,7 @@ fun DownloadScreen(vm: DownloadViewModel = viewModel()) {
             )
 
             Button(
-                onClick = vm::listFiles,
+                onClick = { vm.listFiles() },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("列出文件") }
 

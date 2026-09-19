@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 
 class ModelsViewModel : ViewModel() {
@@ -65,7 +66,7 @@ class ModelsViewModel : ViewModel() {
         viewModelScope.launch {
             val m = repo.getById(id) ?: return@launch
             // 读当前设置
-            val config = kotlinx.coroutines.flow.firstOrNull(container.settingsRepository.config)
+            val config = container.settingsRepository.config.firstOrNull()
                 ?: InferenceConfig()
             engine.loadModel(m.filePath, config)
             settings.setLastModel(id)

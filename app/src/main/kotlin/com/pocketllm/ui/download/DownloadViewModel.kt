@@ -75,8 +75,8 @@ class DownloadViewModel : ViewModel() {
                 }
             }.onSuccess {
                 container.modelRepository.registerDownloaded(
-                    filePath = it.absolutePath,
-                    name = it.nameWithoutExtension
+                    filePath = dest.absolutePath,
+                    name = dest.nameWithoutExtension
                 )
             }.onFailure { e ->
                 _ui.value = _ui.value.copy(error = e.message)

@@ -57,6 +57,7 @@ endif()
 # ===== PocketLLM 自己的源 =====
 add_library(pocketllm SHARED
     native_bridge.cpp
+    bridge.cpp
     memory_pool.cpp
     thermals.cpp
 )

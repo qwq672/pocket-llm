@@ -72,7 +72,7 @@ class ThermalMonitor {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val pm = appContext?.getSystemService(Context.POWER_SERVICE) as? PowerManager
-                val status = pm?.thermalStatus ?: PowerManager.THERMAL_STATUS_NONE
+                val status = pm?.getThermalStatus() ?: PowerManager.THERMAL_STATUS_NONE
                 when (status) {
                     PowerManager.THERMAL_STATUS_NONE -> 0
                     PowerManager.THERMAL_STATUS_LIGHT -> 20

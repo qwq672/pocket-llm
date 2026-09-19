@@ -6,7 +6,7 @@ import retrofit2.http.GET
 import retrofit2.http.Path
 
 /** HuggingFace 原始源 */
-class HuggingFaceSource : ModelSource {
+open class HuggingFaceSource : ModelSource {
     override val id = "hf"
     override val displayNameZh = "HuggingFace（海外）"
     override val displayNameEn = "HuggingFace (Global)"
@@ -45,7 +45,7 @@ interface HfApi {
     suspend fun listTree(@Path("repo") repo: String, @Path("_") branch: String = "main"): List<HfTreeItem>
 }
 
-private fun retrofitBuild(baseUrl: String): retrofit2.Retrofit {
+internal fun retrofitBuild(baseUrl: String): retrofit2.Retrofit {
     return retrofit2.Retrofit.Builder()
         .baseUrl(if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/")
         .client(

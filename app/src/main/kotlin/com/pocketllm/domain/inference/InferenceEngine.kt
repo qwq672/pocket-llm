@@ -77,6 +77,7 @@ class InferenceEngine(
                     config = tuned
                 )
                 Log.i("InferenceEngine", "loaded ${modelPath.substringAfterLast('/')} via ${config.backend}")
+                Unit
             }.onFailure {
                 Log.e("InferenceEngine", "load failed", it)
                 _state.value = _state.value.copy(loaded = false, error = it.message)

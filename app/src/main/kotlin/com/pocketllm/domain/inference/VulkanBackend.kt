@@ -29,10 +29,13 @@ class VulkanBackend(
 
     override suspend fun load(modelPath: String, config: InferenceConfig): Boolean = withContext(Dispatchers.Default) {
         val threads = config.effectiveThreads(cpuInfo.bigCores)
+        // 关键：llama.cpp 通过 nGpuLayers > 0 启用 GPU 后端，nGpuLayers=0 时全部 CPU。
+        // 用户选 Vulkan 但 nGpuLayers=0 等于白选，这里自动给一个合理默认（99 = 尽量 offload）。
+        val gpuLayers = if (config.nGpuLayers == 0) 99 else config.nGpuLayers
         val ok = native.llamaLoad(
             modelPath = modelPath,
             backend = type.id,
-            nGpuLayers = config.nGpuLayers,
+            nGpuLayers = gpuLayers,
             threads = threads,
             physicalBatch = config.physicalBatch,
             batch = config.batch,

@@ -67,10 +67,13 @@ object AppLogger {
         }
     }
 
-    /** 设置开关：从设置页面切换 */
-    fun setEnabled(on: Boolean) {
+    /** 设置开关：从设置页面切换。silent=true 时不要打印 log（避免被 DataStore flow emit 触发死循环）。 */
+    fun setEnabled(on: Boolean, silent: Boolean = false) {
+        val changed = enabled.getAndSet(on) != on
         enabled.set(on)
-        log(Log.INFO, "AppLogger", "logging ${if (on) "enabled" else "disabled"}")
+        if (changed && !silent) {
+            log(Log.INFO, "AppLogger", "logging ${if (on) "enabled" else "disabled"}")
+        }
     }
 
     fun isEnabled(): Boolean = enabled.get()

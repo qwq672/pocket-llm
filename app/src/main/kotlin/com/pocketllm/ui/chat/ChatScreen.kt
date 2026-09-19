@@ -1,6 +1,13 @@
 package com.pocketllm.ui.chat
 
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.InfiniteRepeatableSpec
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -16,6 +23,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -23,21 +32,35 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
-import androidx.compose.material.icons.outlined.Bolt
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.material.icons.outlined.Thermostat
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +70,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -55,14 +81,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pocketllm.data.model.ChatMessage
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val keyboard = LocalSoftwareKeyboardController.current
+    val snackbarHost = remember { SnackbarHostState() }
+    val context = LocalContext.current
 
-    // 仅在消息列表 size 变化时滚动到底（每个新 token 的刷新会让 LazyColumn 内部自然滚，
-    // 避免每次 currentStream 变化都重新触发 animateScrollToItem）
+    // 仅在消息列表 size 变化时滚动到底，避免每个 token 都触发 animateScrollToItem
     LaunchedEffect(ui.messages.size) {
         if (ui.messages.isNotEmpty()) {
             listState.animateScrollToItem(ui.messages.lastIndex)
@@ -74,117 +102,168 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             listState.animateScrollToItem(ui.messages.size)
         }
     }
-
-    Column(Modifier.fillMaxSize()) {
-        TopStatusBar(
-            modelName = ui.modelName,
-            backendName = ui.backendName,
-            tps = ui.tokensPerSecond,
-            thermal = ui.thermalPercent,
-            ctxUsed = ui.contextUsed,
-            ctxMax = ui.contextMax
-        )
-
-        if (ui.errorMessage != null) {
-            ErrorBanner(ui.errorMessage!!) { vm.dismissError() }
+    // 错误用 snackbar
+    LaunchedEffect(ui.errorMessage) {
+        ui.errorMessage?.let { msg ->
+            snackbarHost.showSnackbar(msg)
+            vm.dismissError()
         }
+    }
 
-        if (!ui.hasModel) {
-            EmptyModelState(
-                modifier = Modifier.weight(1f),
-                onGoToModels = { /* nav handled by user */ }
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                state = listState,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(items = ui.messages, key = { m -> "${m.id}-${m.ts}" }) { m ->
-                    MessageBubble(m)
-                }
-                if (ui.currentStream.isNotEmpty()) {
-                    item(key = "stream") {
-                        MessageBubble(
-                            ChatMessage(role = "assistant", content = ui.currentStream, sessionId = 0)
+    var menuOpen by remember { mutableStateOf(false) }
+    var clearOpen by remember { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            ui.modelName.ifEmpty { "未加载模型" },
+                            style = MaterialTheme.typography.titleLarge,
+                            maxLines = 1,
+                            fontWeight = FontWeight.SemiBold
                         )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                ui.backendName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (ui.tokensPerSecond > 0) {
+                                Spacer(Modifier.width(6.dp))
+                                Dot()
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "%.1f tok/s".format(ui.tokensPerSecond),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            if (ui.contextMax > 0) {
+                                Spacer(Modifier.width(6.dp))
+                                Dot()
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "${formatCtx(ui.contextUsed)}/${formatCtx(ui.contextMax)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                },
+                actions = {
+                    ThermalPill(percent = ui.thermalPercent)
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Outlined.MoreVert, contentDescription = "更多")
+                        }
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("切换模型") },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.SwapHoriz, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    Toast.makeText(context, "请到「模型」页加载", Toast.LENGTH_SHORT).show()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("清空对话") },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.DeleteSweep, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    clearOpen = true
+                                }
+                            )
+                        }
                     }
                 }
-                if (ui.streaming && ui.currentStream.isEmpty()) {
-                    item(key = "thinking") { ThinkingIndicator() }
+            )
+        },
+        snackbarHost = { SnackbarHost(snackbarHost) }
+    ) { inner ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(inner)
+        ) {
+            if (!ui.hasModel) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    EmptyModelState()
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    state = listState,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(items = ui.messages, key = { m -> "${m.id}-${m.ts}" }) { m ->
+                        MessageBubble(m)
+                    }
+                    if (ui.currentStream.isNotEmpty()) {
+                        item(key = "stream") {
+                            MessageBubble(
+                                ChatMessage(role = "assistant", content = ui.currentStream, sessionId = 0),
+                                animate = true
+                            )
+                        }
+                    }
+                    if (ui.streaming && ui.currentStream.isEmpty()) {
+                        item(key = "thinking") { ThinkingIndicator() }
+                    }
+                    // 让最后一条消息不被输入栏挡住
+                    item(key = "bottom_spacer") { Spacer(Modifier.height(8.dp)) }
                 }
             }
-        }
 
-        InputBar(
-            streaming = ui.streaming,
-            onSend = { txt -> vm.send(txt); keyboard?.hide() },
-            onStop = { vm.stop() }
+            // 输入栏始终在底部
+            InputBar(
+                streaming = ui.streaming,
+                enabled = ui.hasModel,
+                onSend = { txt -> vm.send(txt); keyboard?.hide() },
+                onStop = { vm.stop() }
+            )
+        }
+    }
+
+    if (clearOpen) {
+        AlertDialog(
+            onDismissRequest = { clearOpen = false },
+            title = { Text("清空对话？") },
+            text = { Text("当前对话的 ${ui.messages.size} 条消息将被全部清空。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.clearMessages()
+                    clearOpen = false
+                }) { Text("清空", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { clearOpen = false }) { Text("取消") }
+            }
         )
     }
 }
 
 @Composable
-private fun TopStatusBar(
-    modelName: String,
-    backendName: String,
-    tps: Float,
-    thermal: Int,
-    ctxUsed: Int,
-    ctxMax: Int
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = modelName.ifEmpty { "未加载模型" },
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        backendName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (tps > 0) {
-                        Spacer(Modifier.width(6.dp))
-                        Text("·", color = MaterialTheme.colorScheme.outline)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "%.1f tok/s".format(tps),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    if (ctxMax > 0) {
-                        Spacer(Modifier.width(6.dp))
-                        Text("·", color = MaterialTheme.colorScheme.outline)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "$ctxUsed / $ctxMax",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-            ThermalPill(thermal)
-        }
-    }
+private fun Dot() {
+    Box(
+        Modifier
+            .size(3.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.outline)
+    )
 }
 
 @Composable
@@ -194,23 +273,28 @@ private fun ThermalPill(percent: Int) {
         percent >= 70 -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.primary
     }
+    val containerColor = when {
+        percent >= 85 -> MaterialTheme.colorScheme.errorContainer
+        percent >= 70 -> MaterialTheme.colorScheme.tertiaryContainer
+        else -> MaterialTheme.colorScheme.primaryContainer
+    }
     Surface(
-        color = color.copy(alpha = 0.15f),
-        shape = RoundedCornerShape(12.dp)
+        color = containerColor,
+        shape = MaterialTheme.shapes.small
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Box(
-                Modifier
-                    .size(8.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(color)
+            Icon(
+                Icons.Outlined.Thermostat,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(14.dp)
             )
             Text(
-                "热度 $percent%",
+                "$percent%",
                 style = MaterialTheme.typography.labelSmall,
                 color = color,
                 fontWeight = FontWeight.SemiBold
@@ -220,47 +304,44 @@ private fun ThermalPill(percent: Int) {
 }
 
 @Composable
-private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.errorContainer
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+private fun EmptyModelState() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = onDismiss) {
-                Icon(Icons.Outlined.Stop, contentDescription = "关闭")
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Outlined.SmartToy,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(48.dp)
+                )
             }
-        }
-    }
-}
-
-@Composable
-private fun EmptyModelState(modifier: Modifier = Modifier, onGoToModels: () -> Unit) {
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                Icons.Outlined.SmartToy,
-                contentDescription = null,
-                modifier = Modifier.size(56.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.height(16.dp))
-            Text("尚未加载模型", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
             Text(
-                "请前往「模型」页加载已下载的 gguf，或到「下载」页拉取推荐模型",
+                "尚未加载模型",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                "请到「模型」页加载已下载的 gguf，或下载推荐模型",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            val ctx = LocalContext.current
+            Button(onClick = {
+                Toast.makeText(ctx, "请到「模型」页加载", Toast.LENGTH_SHORT).show()
+            }) {
+                Icon(Icons.Outlined.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("前往模型管理")
+            }
         }
     }
 }
@@ -268,107 +349,155 @@ private fun EmptyModelState(modifier: Modifier = Modifier, onGoToModels: () -> U
 @Composable
 private fun ThinkingIndicator() {
     Row(
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+        modifier = Modifier
+            .padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Icon(
-            Icons.Outlined.Bolt,
-            contentDescription = null,
-            modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-        Text(
-            "正在思考…",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        // 头像
+        Box(
+            Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Outlined.SmartToy,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+        Spacer(Modifier.width(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            BouncingDot(delay = 0)
+            BouncingDot(delay = 120)
+            BouncingDot(delay = 240)
+        }
     }
 }
 
 @Composable
-private fun MessageBubble(m: ChatMessage) {
+private fun BouncingDot(delay: Int) {
+    val transition = rememberInfiniteTransition(label = "bounce")
+    val dy by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 0f,
+        animationSpec = InfiniteRepeatableSpec(
+            animation = keyframes {
+                durationMillis = 900
+                delayMillis = delay
+                0f at 0
+                -6f at 200
+                0f at 400
+            },
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "offset"
+    )
+    Box(
+        Modifier
+            .size(8.dp)
+            .offset(y = dy.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary)
+    )
+}
+
+@Composable
+private fun MessageBubble(m: ChatMessage, animate: Boolean = false) {
     val isUser = m.role == "user"
+    val bubbleColor = if (isUser) MaterialTheme.colorScheme.primary
+                      else MaterialTheme.colorScheme.surfaceContainerHigh
+    val onBubbleColor = if (isUser) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurface
+
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+            .padding(vertical = 2.dp),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Top
     ) {
         if (!isUser) {
-            // 头像
-            Box(
-                Modifier
-                    .size(32.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Outlined.SmartToy,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
+            Avatar(
+                icon = Icons.Outlined.SmartToy,
+                bg = MaterialTheme.colorScheme.primaryContainer,
+                fg = MaterialTheme.colorScheme.onPrimaryContainer
+            )
             Spacer(Modifier.width(8.dp))
         }
         Surface(
-            color = if (isUser) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(
-                topStart = 16.dp, topEnd = 16.dp,
-                bottomEnd = if (isUser) 4.dp else 16.dp,
-                bottomStart = if (isUser) 16.dp else 4.dp
-            ),
-            modifier = Modifier.widthIn(max = 320.dp)
+            color = bubbleColor,
+            shape = bubbleShape(isUser),
+            modifier = Modifier
+                .widthIn(max = 320.dp)
+                .then(if (animate) Modifier.animateContentSize(animationSpec = tween(120)) else Modifier)
         ) {
             Text(
                 m.content,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                color = if (isUser) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurface,
+                color = onBubbleColor,
                 style = MaterialTheme.typography.bodyMedium
             )
         }
         if (isUser) {
             Spacer(Modifier.width(8.dp))
-            Box(
-                Modifier
-                    .size(32.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Outlined.ChatBubbleOutline,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            Avatar(
+                icon = Icons.Outlined.Person,
+                bg = MaterialTheme.colorScheme.surfaceVariant,
+                fg = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
 
 @Composable
+private fun Avatar(
+    icon: ImageVector,
+    bg: Color,
+    fg: Color
+) {
+    Box(
+        Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(bg),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(18.dp))
+    }
+}
+
+private fun bubbleShape(isUser: Boolean) = RoundedCornerShape(
+    topStart = 16.dp,
+    topEnd = 16.dp,
+    bottomEnd = if (isUser) 4.dp else 16.dp,
+    bottomStart = if (isUser) 16.dp else 4.dp
+)
+
+@Composable
 private fun InputBar(
     streaming: Boolean,
+    enabled: Boolean,
     onSend: (String) -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var input by remember { mutableStateOf("") }
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .imePadding(),  // 让输入栏跟随键盘
+            .imePadding()
+            .navigationBarsPadding(),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 3.dp
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             OutlinedTextField(
@@ -377,7 +506,8 @@ private fun InputBar(
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("输入消息…") },
                 maxLines = 5,
-                shape = RoundedCornerShape(24.dp),
+                enabled = enabled,
+                shape = MaterialTheme.shapes.extraLarge,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(
                     onSend = {
@@ -390,8 +520,8 @@ private fun InputBar(
             Spacer(Modifier.width(8.dp))
             AnimatedVisibility(
                 visible = !streaming,
-                enter = scaleIn() + fadeIn(),
-                exit = scaleOut() + fadeOut()
+                enter = scaleIn(tween(200)) + fadeIn(tween(200)),
+                exit = scaleOut(tween(200)) + fadeOut(tween(200))
             ) {
                 IconButton(
                     onClick = {
@@ -399,18 +529,20 @@ private fun InputBar(
                             onSend(input); input = ""
                         }
                     },
-                    enabled = input.isNotBlank()
+                    enabled = enabled && input.isNotBlank()
                 ) {
                     Icon(
                         Icons.AutoMirrored.Outlined.Send,
-                        contentDescription = "发送"
+                        contentDescription = "发送",
+                        tint = if (enabled && input.isNotBlank()) MaterialTheme.colorScheme.primary
+                               else MaterialTheme.colorScheme.outline
                     )
                 }
             }
             AnimatedVisibility(
                 visible = streaming,
-                enter = scaleIn() + fadeIn(),
-                exit = scaleOut() + fadeOut()
+                enter = scaleIn(tween(200)) + fadeIn(tween(200)),
+                exit = scaleOut(tween(200)) + fadeOut(tween(200))
             ) {
                 IconButton(onClick = onStop) {
                     Icon(
@@ -422,4 +554,9 @@ private fun InputBar(
             }
         }
     }
+}
+
+private fun formatCtx(n: Int): String = when {
+    n >= 1024 -> "%.1fK".format(n / 1024.0)
+    else -> n.toString()
 }

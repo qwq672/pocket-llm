@@ -55,7 +55,8 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             container.settingsRepository.loggingEnabled.collectLatest {
                 _ui.value = _ui.value.copy(loggingEnabled = it)
-                AppLogger.setEnabled(it)
+                // silent=true 避免 DataStore flow emit 触发 AppLogger 写 log 反过来又触发 UI 刷新
+                AppLogger.setEnabled(it, silent = true)
             }
         }
         viewModelScope.launch {

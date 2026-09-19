@@ -37,22 +37,21 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK / NDK / CMake packages
         run: |
+          # ubuntu-latest 已预装 cmdline-tools；直接用它安装所需组件
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          export ANDROID_HOME=/usr/local/lib/android/sdk
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platforms;android-34" "build-tools;34.0.0" \
                      "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}"
+          echo "sdk.dir=/usr/local/lib/android/sdk" > local.properties
 
       - name: Fetch llama.cpp (pinned ${LLAMA_REF})
         run: |
           mkdir -p app/src/main/cpp
           git clone --depth 1 --branch "${LLAMA_REF}" \
             https://github.com/ggml-org/llama.cpp app/src/main/cpp/llama.cpp
-
-      - name: Write local.properties
-        run: echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
 
       - name: Cache Gradle wrapper and build outputs
         uses: actions/cache@v4

@@ -112,9 +112,9 @@ fun ModelsScreen(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = launchImport,
-                icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
                 text = { Text("导入本地模型") },
+                icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
+                onClick = launchImport,
                 tonalElevation = 3.dp
             )
         },

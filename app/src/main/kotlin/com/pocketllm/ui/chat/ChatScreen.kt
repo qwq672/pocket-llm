@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.InfiniteRepeatableSpec
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -399,7 +400,7 @@ private fun BouncingDot(delay: Int) {
     Box(
         Modifier
             .size(8.dp)
-            .offset(y = dy.dp)
+            .offset(y = dy.toInt().dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primary)
     )

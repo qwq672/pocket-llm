@@ -27,10 +27,12 @@
 #define TAG "PocketLLM-Native"
 
 // 双路日志：__android_log_print + 通过 JNI 回调传给 Kotlin AppLogger 写文件。
+// g_vm 必须在 native_log 之前声明（native_log 内部用 g_vm attach 线程调到 Kotlin）
+static JavaVM* g_vm = nullptr;
+
 // native_log_cb 由 setNativeLogCallback 注入；如果未注册则只走 logcat。
-static jobject g_log_cb = nullptr;       // 全局 ref to Kotlin lambda
-static jmethodID g_log_cb_mid = nullptr; // Function3.invoke 的 jmethodID
-static jclass    g_log_cls = nullptr;    // Kotlin NativeBridge companion for onNativeLog
+static jobject g_log_cb = nullptr;       // 全局 ref to Kotlin lambda（保留接口供将来扩展）
+static jclass    g_log_cls = nullptr;    // Kotlin NativeBridge class for onNativeLog
 static jmethodID g_on_native_log_mid = nullptr;
 
 static void native_log(int priority, const char* tag, const char* fmt, ...) {
@@ -78,7 +80,7 @@ static const llama_vocab* g_vocab = nullptr;
 static std::atomic<bool> g_interrupt{false};
 static std::atomic<int>  g_ctx_used{0};
 
-static JavaVM* g_vm = nullptr;
+// g_vm 已在文件早期声明（native_log 之前），这里不再重复
 
 // 缓存 Kotlin Function1.invoke 的 jclass/jmethodID，避免每次回调都 FindClass/GetMethodID
 static jclass    g_f1_cls       = nullptr;  // 全局 ref to kotlin.jvm.functions.Function1

@@ -82,9 +82,7 @@ static std::atomic<int>  g_ctx_used{0};
 
 // g_vm 已在文件早期声明（native_log 之前），这里不再重复
 
-// 缓存 Kotlin Function1.invoke 的 jclass/jmethodID，避免每次回调都 FindClass/GetMethodID
-static jclass    g_f1_cls       = nullptr;  // 全局 ref to kotlin.jvm.functions.Function1
-static jmethodID g_invoke_mid   = nullptr;
+// g_cb_cls / g_cb_mid（StringCallback.onValue）在 ensure_cb_cache 中按需初始化。
 
 // 内存池
 static MemoryPool g_pool;
@@ -232,25 +230,32 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaSetSampler(
 }
 
 // ---------- 回调辅助 ----------
-// 在 JNI_OnLoad 时缓存（这时主线程的 ClassLoader 知道所有 Kotlin 类）。
-// 在子线程 AttachCurrentThread 后 FindClass 经常找不到 Kotlin 类，所以必须缓存。
+// 用 Java interface StringCallback（无 generic）替代 Kotlin Function1，
+// 因为某些 NDK/ART 版本下 GetMethodID 在 Kotlin Function1.invoke 上失败。
+// StringCallback.onValue(String) 的签名固定：'(Ljava/lang/String;)V'
+static jclass    g_cb_cls       = nullptr;  // 全局 ref to com.pocketllm.infra.jni.StringCallback
+static jmethodID g_cb_mid       = nullptr;  // StringCallback.onValue methodID
+
 static bool ensure_cb_cache(JNIEnv* env) {
-    if (g_f1_cls && g_invoke_mid) return true;
+    if (g_cb_cls && g_cb_mid) return true;
     if (!env) return false;
-    jclass local = env->FindClass("kotlin/jvm/functions/Function1");
-    if (!local || env->ExceptionCheck()) {
-        env->ExceptionClear();
-        LOGE("ensure_cb_cache: FindClass(Function1) failed");
-        return false;
+    if (!g_cb_cls) {
+        jclass local = env->FindClass("com/pocketllm/infra/jni/StringCallback");
+        if (!local || env->ExceptionCheck()) {
+            env->ExceptionClear();
+            LOGE("ensure_cb_cache: FindClass(StringCallback) failed");
+            return false;
+        }
+        g_cb_cls = (jclass) env->NewGlobalRef(local);
+        env->DeleteLocalRef(local);
     }
-    g_f1_cls = (jclass) env->NewGlobalRef(local);
-    env->DeleteLocalRef(local);
-    g_invoke_mid = env->GetMethodID(g_f1_cls, "invoke",
-        "(Ljava/lang/Object;)Ljava/lang/Object;");
-    if (!g_invoke_mid || env->ExceptionCheck()) {
-        env->ExceptionClear();
-        LOGE("ensure_cb_cache: GetMethodID(invoke) failed");
-        return false;
+    if (!g_cb_mid) {
+        g_cb_mid = env->GetMethodID(g_cb_cls, "onValue", "(Ljava/lang/String;)V");
+        if (!g_cb_mid || env->ExceptionCheck()) {
+            env->ExceptionClear();
+            LOGE("ensure_cb_cache: GetMethodID(onValue) failed");
+            return false;
+        }
     }
     return true;
 }
@@ -261,16 +266,14 @@ static bool call_string_cb(JNIEnv* env, jobject cb, const std::string& s) {
     if (!ensure_cb_cache(env)) return false;
     if (env->ExceptionCheck()) env->ExceptionClear();
     jstring js = env->NewStringUTF(s.c_str());
-    jobject res = env->CallObjectMethod(cb, g_invoke_mid, js);
+    env->CallVoidMethod(cb, g_cb_mid, js);
     if (env->ExceptionCheck()) {
         env->ExceptionDescribe();
         env->ExceptionClear();
-        if (js)  env->DeleteLocalRef(js);
-        if (res) env->DeleteLocalRef(res);
+        if (js) env->DeleteLocalRef(js);
         return false;
     }
-    if (js)  env->DeleteLocalRef(js);
-    if (res) env->DeleteLocalRef(res);
+    if (js) env->DeleteLocalRef(js);
     return true;
 }
 
@@ -461,26 +464,17 @@ Java_com_pocketllm_infra_jni_NativeBridge_thermalPercent(JNIEnv*, jclass) {
 }
 
 // ---------- native log callback ----------
-extern "C" JNIEXPORT void JNICALL
-Java_com_pocketllm_infra_jni_NativeBridge_setNativeLogCallback(
-    JNIEnv* env, jclass, jobject callback)
-{
-    // 释放旧的
-    if (g_log_cb) {
-        env->DeleteGlobalRef(g_log_cb);
-        g_log_cb = nullptr;
-    }
-    if (callback) {
-        g_log_cb = env->NewGlobalRef(callback);
-    }
-}
+// native_log() 直接调 NativeBridge.onNativeLog(level, tag, msg) 静态方法，
+// 不再需要 JNI setNativeLogCallback 接口（Kotlin 端通过 setLogHandler 注册 handler）。
 
 // ---------- JNI_OnLoad ----------
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     g_vm = vm;
     JNIEnv* env = nullptr;
     if (vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_VERSION_1_6;
-    // 在主线程的 ClassLoader 上下文中缓存 Function1.invoke
+    // 在主线程 ClassLoader 上下文预缓存 StringCallback.onValue（后续 completion 回调用）
+    // 这里调 ensure_cb_cache 在主线程做 FindClass，避免运行时在 Dispatchers.Default
+    // 线程上 FindClass 失败（虽然项目类一般能找到，但保险起见）。
     ensure_cb_cache(env);
     // 缓存 NativeBridge.onNativeLog 静态方法用于 native_log 回调
     jclass local = env->FindClass("com/pocketllm/infra/jni/NativeBridge");
@@ -498,5 +492,8 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         env->ExceptionClear();
         LOGE("JNI_OnLoad: cannot find NativeBridge class");
     }
+    LOGI("JNI_OnLoad: cb_cache=%s  log_mid=%p",
+         ensure_cb_cache(env) ? "ok" : "FAIL",
+         (void*)g_on_native_log_mid);
     return JNI_VERSION_1_6;
 }

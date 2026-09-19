@@ -47,11 +47,14 @@ class NativeBridge {
     /**
      * 流式补全。token 通过 [tokenCallback] 回调到 JVM（已是字符串），
      * 完成时调用 [stopCallback] 传入 stop reason。
+     *
+     * 注意：使用专用 Java interface（不带 generic）而不是 Kotlin (String)->Unit，
+     * 因为 C++ 端 FindClass/GetMethodID 在 Kotlin Function1.invoke 上经常失败。
      */
     external fun llamaCompletion(
         prompt: String,
-        tokenCallback: (String) -> Unit,
-        stopCallback: (String) -> Unit
+        tokenCallback: StringCallback,
+        stopCallback: StringCallback
     )
 
     external fun llamaInterrupt()
@@ -77,12 +80,6 @@ class NativeBridge {
     // -------- 热感知 --------
     external fun thermalPercent(): Int
 
-    /**
-     * 注册 native 侧日志回调。C++ 内部的 LOGI/LOGE 会通过此回调传给 Kotlin 写文件。
-     * 传 null 取消注册。回调在 native 调用线程上同步执行，请勿在其中再做 JNI 反向调用。
-     */
-    external fun setNativeLogCallback(callback: ((level: Int, tag: String, msg: String) -> Unit)?)
-
     companion object {
         @Volatile private var logHandler: ((Int, String, String) -> Unit)? = null
 
@@ -98,3 +95,12 @@ class NativeBridge {
         }
     }
 }
+
+/**
+ * 单字符串参数回调。Java interface，无 generic，C++ 端 GetMethodID 100% 可靠。
+ * 用法：`object : StringCallback { override fun onValue(v: String) { ... } }`
+ */
+interface StringCallback {
+    fun onValue(value: String)
+}
+

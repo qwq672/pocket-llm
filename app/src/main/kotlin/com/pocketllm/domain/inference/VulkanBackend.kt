@@ -1,6 +1,7 @@
 package com.pocketllm.domain.inference
 
 import com.pocketllm.infra.jni.NativeBridge
+import com.pocketllm.infra.jni.StringCallback
 import com.pocketllm.util.CpuInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -53,7 +54,13 @@ class VulkanBackend(
         onStopReason: (String) -> Unit
     ) = withContext(Dispatchers.Default) {
         if (!loaded) { onStopReason("no_model"); return@withContext }
-        native.llamaCompletion(prompt, onToken, onStopReason)
+        val tokCb = object : StringCallback {
+            override fun onValue(value: String) { onToken(value) }
+        }
+        val stopCb = object : StringCallback {
+            override fun onValue(value: String) { onStopReason(value) }
+        }
+        native.llamaCompletion(prompt, tokCb, stopCb)
     }
 
     override fun interrupt() = native.llamaInterrupt()

@@ -1,7 +1,6 @@
 package com.pocketllm
 
 import android.app.Application
-import android.util.Log
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.pocketllm.di.AppContainer
@@ -20,15 +19,11 @@ class PocketLLMApp : Application(), Configuration.Provider {
         AppLogger.init(this)
         logi("PocketLLM Application onCreate")
 
-        // 把 native 侧的 LOGI/LOGE 通过回调桥到 AppLogger，让用户能看到 C++ 日志
-        try {
-            NativeBridge.setLogHandler { level, tag, msg ->
-                // level 值：ANDROID_LOG_VERBOSE=2, DEBUG=3, INFO=4, WARN=5, ERROR=6
-                AppLogger.log(level, tag, msg)
-            }
-            container_native_log_install()
-        } catch (t: Throwable) {
-            loge("native log handler install failed", t)
+        // 把 native 侧的 LOGI/LOGE 通过 NativeBridge.onNativeLog 静态方法桥到 AppLogger，
+        // 让用户在 pocketllm.log 中也能看到 C++ 端的日志（无需 adb logcat）。
+        NativeBridge.setLogHandler { level, tag, msg ->
+            // level 值：ANDROID_LOG_VERBOSE=2, DEBUG=3, INFO=4, WARN=5, ERROR=6
+            AppLogger.log(level, tag, msg)
         }
 
         installCrashLogger()
@@ -39,20 +34,6 @@ class PocketLLMApp : Application(), Configuration.Provider {
         // 初始化 WorkManager（保留用于后续可能的真正后台下载实现）
         runCatching { WorkManager.initialize(this, workManagerConfiguration) }
             .onFailure { loge("WorkManager init failed", it) }
-    }
-
-    /**
-     * 注册 native_log callback。需要 container 先初始化出 nativeBridge，
-     * 但 container 在 super.onCreate 之后才构造，所以这里临时构造一个
-     * NativeBridge 单独用于注册。
-     */
-    private fun container_native_log_install() {
-        // 不直接调用 nativeBridge.nativeVersion() 因为 container 还没建
-        // 这里用一个独立 NativeBridge 实例注册 callback
-        val nb = NativeBridge()
-        nb.setNativeLogCallback { level, tag, msg ->
-            AppLogger.log(level, tag, msg)
-        }
     }
 
     override val workManagerConfiguration: Configuration
@@ -79,4 +60,5 @@ class PocketLLMApp : Application(), Configuration.Provider {
             private set
     }
 }
+
 

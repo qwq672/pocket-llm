@@ -1,0 +1,8 @@
+# 把这一行改成你本机的 SDK 路径
+# Windows:  C\:\\Users\\<you>\\AppData\\Local\\Android\\Sdk
+# macOS:    /Users/<you>/Library/Android/sdk
+# Linux:    /home/<you>/Android/Sdk
+sdk.dir=/home/your-user/Android/Sdk
+
+# NDK 路径（可选，Android Studio 会自动选择）
+# ndk.dir=/home/your-user/Android/Sdk/ndk/26.1.10909125

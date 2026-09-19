@@ -30,24 +30,16 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 // ---------- llama.cpp 0.4.x 兼容层 ----------
-// 0.4.1 之前用 `bool flash_attn`；之后改为 `enum llama_flash_attn_type flash_attn_type`。
-// 用编译期宏探测：如果 llama.h 里定义了 LLAMA_FLASH_ATTN_TYPE_ENABLED 就走新接口，
-// 否则 fallback 到 bool flash_attn = true。
-#if defined(LLAMA_FLASH_ATTN_TYPE_ENABLED)
-  #define POCKET_SET_FLASH_ATTN(cp) (cp).flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED
-#else
-  #define POCKET_SET_FLASH_ATTN(cp) (cp).flash_attn = true
-#endif
+// v0.4.1 起，flash_attn 字段被改成 enum llama_flash_attn_type flash_attn_type。
+// 该枚举值 LLAMA_FLASH_ATTN_TYPE_ENABLED 是 enum 不是 #define 宏，
+// 因此不能用 #if defined() 探测；这里直接使用新接口（CI 固定 v0.4.1+）。
+// 若需兼容 <0.4.1 的旧 llama.cpp，请手动改为 cp.flash_attn = true。
+#define POCKET_SET_FLASH_ATTN(cp) (cp).flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED
 
-// llama_kv_self_clear 在 0.4.1 中存在；若某些 fork 移除/重命名则用 llama_kv_clear。
-// 这里使用弱声明探测，链接时若找不到会自动用 llama_kv_clear 兜底。
-#if !defined(LLAMA_API_HAVE_KV_SELF_CLEAR)
-  // 编译期不能可靠探测；运行时通过 dlsym 检测，但简单起见直接调用 ——
-  // 如果链接失败请把下一行改成 llama_kv_clear(g_ctx)
-  #define POCKET_KV_CLEAR(ctx) llama_kv_self_clear(ctx)
-#else
-  #define POCKET_KV_CLEAR(ctx) llama_kv_self_clear(ctx)
-#endif
+// v0.4.1 用 llama_memory_t 抽象 KV cache，清空 API 是：
+//   llama_memory_clear(llama_get_memory(ctx), /*data=*/true)
+// 旧版本则是 llama_kv_self_clear(ctx)。这里直接用新 API。
+#define POCKET_KV_CLEAR(ctx) llama_memory_clear(llama_get_memory(ctx), true)
 
 // ---------- 全局状态 ----------
 static std::mutex g_mutex;            // 保护 g_model / g_ctx 的 load/unload

@@ -73,6 +73,17 @@ jobs:
           cmake -DCMAKE_INSTALL_PREFIX=/usr/local ..
           sudo make install
 
+      - name: Fetch Vulkan-Hpp (C++ bindings, not in NDK)
+        run: |
+          # NDK 只有 vulkan.h (C API)，ggml-vulkan.cpp 需要 vulkan.hpp (C++ binding)。
+          # clone Vulkan-Hpp 并复制到 NDK sysroot 的 include/vulkan/ 目录，
+          # 这样 NDK 的 clang++ 编译时能自动找到（sysroot 是默认 include path）。
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Hpp /tmp/vulkan-hpp
+          NDK_INCLUDE=/usr/local/lib/android/sdk/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan
+          ls $NDK_INCLUDE/vulkan.h || echo "vulkan.h not found in NDK sysroot"
+          sudo cp -r /tmp/vulkan-hpp/vulkan/* $NDK_INCLUDE/
+          ls $NDK_INCLUDE/vulkan.hpp
+
       - name: Cache Gradle wrapper and build outputs
         uses: actions/cache@v4
         with:

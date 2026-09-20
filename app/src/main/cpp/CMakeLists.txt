@@ -31,6 +31,13 @@ option(POCKET_VULKAN  "Enable Vulkan backend"  ON)
 option(POCKET_OPENCL  "Enable OpenCL backend"  ON)
 option(POCKET_NPU     "Enable NPU (HexaGen) backend" OFF)
 
+# SPIRV-Headers 安装到 /usr/local/share/cmake/SPIRV-Headers/（CI 里 install 的）
+# NDK 的 CMake 默认不搜这个路径，显式 set SPIRV-Headers_DIR 让 find_package 能找到。
+# 本地构建如果装在别处，可用 -DSPIRV-Headers_DIR=/path/to 覆盖。
+if(EXISTS /usr/local/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake)
+    set(SPIRV-Headers_DIR /usr/local/share/cmake/SPIRV-Headers CACHE PATH "SPIRV-Headers cmake config dir" FORCE)
+endif()
+
 # ----- 第三方源码目录 -----
 # llama.cpp 源码（含 ggml + ggml-hexagon）：放到 app/src/main/cpp/llama.cpp
 # 用户提到的 "ggml-hexagen" 实际就是 llama.cpp 内置的 ggml-hexagon 后端（高通 QNN HTP）。

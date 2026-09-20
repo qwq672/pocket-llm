@@ -49,12 +49,13 @@ jobs:
           sdkmanager "platforms;android-34" "build-tools;34.0.0" \
                      "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}"
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          # 装 glslc 用于 Vulkan shader 编译
+          # 装 glslc + Vulkan SDK headers 用于 Vulkan 后端编译
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends glslc 2>/dev/null || \
-            sudo apt-get install -y --no-install-recommends glslang-tools 2>/dev/null || \
-            echo "::warning::glslc not installed, Vulkan backend will fail"
+          sudo apt-get install -y --no-install-recommends glslc libvulkan-dev 2>/dev/null || \
+            sudo apt-get install -y --no-install-recommends glslang-tools libvulkan-dev 2>/dev/null || \
+            echo "::warning::glslc/libvulkan-dev not installed, Vulkan backend will fail"
           which glslc || which glslangValidator || true
+          ls /usr/include/vulkan/vulkan.hpp || true
 
       - name: Fetch llama.cpp (pinned ${LLAMA_REF})
         run: |

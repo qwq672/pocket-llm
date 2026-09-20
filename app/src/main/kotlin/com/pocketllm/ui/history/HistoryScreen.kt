@@ -320,6 +320,7 @@ private fun SessionCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SearchResultRow(result: SearchResult, onClick: () -> Unit) {
     Card(

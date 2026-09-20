@@ -56,6 +56,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +70,7 @@ import com.pocketllm.data.model.ModelInfo
 import com.pocketllm.domain.download.RemoteGgufFile
 import com.pocketllm.ui.components.ModelCard
 import com.pocketllm.ui.download.DownloadViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -106,7 +108,7 @@ fun ModelsScreen(
     }
 
     val drawerState = com.pocketllm.ui.nav.LocalDrawerState.current
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {

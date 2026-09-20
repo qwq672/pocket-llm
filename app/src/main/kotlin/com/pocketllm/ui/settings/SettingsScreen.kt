@@ -18,6 +18,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.RestartAlt
@@ -67,10 +68,17 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val snackbarHost = remember { SnackbarHostState() }
+    val drawerState = com.pocketllm.ui.nav.LocalDrawerState.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(Icons.Outlined.Menu, contentDescription = "菜单")
+                    }
+                },
                 title = { Text("设置", style = MaterialTheme.typography.titleLarge) }
             )
         },

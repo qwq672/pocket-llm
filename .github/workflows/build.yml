@@ -68,10 +68,11 @@ jobs:
       - name: Build release APK (CPU + Vulkan + OpenCL, arm64-v8a)
         run: |
           chmod +x ./gradlew
-          # 启用 Vulkan 与 OpenCL 后端；NPU 需要高通 QNN SDK（私有），CI 不开。
-          # 这两个 backend 在没有 GPU 的设备上会被运行时自动回退到 CPU。
-          ./gradlew :app:assembleRelease --stacktrace --no-daemon \
-            -Pandroid.externalNativeBuild.cmake.arguments="-DPOCKET_VULKAN=ON,-DPOCKET_OPENCL=ON"
+          # CMakeLists.txt 默认启用 Vulkan 和 OpenCL 后端（option(POCKET_VULKAN ... ON)）
+          # 不需要再传 cmake arguments。
+          # NPU 仍 OFF，需要私有高通 QNN SDK。
+          # 没有 GPU 的设备运行时会自动回退到 CPU。
+          ./gradlew :app:assembleRelease --stacktrace --no-daemon
 
       - name: Rename and collect APK
         run: |

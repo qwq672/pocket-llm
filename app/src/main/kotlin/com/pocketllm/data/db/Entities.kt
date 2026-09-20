@@ -22,7 +22,10 @@ data class SessionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
     val modelId: Long?,
-    val createdAt: Long
+    val createdAt: Long,
+    val lastUsedAt: Long = 0,
+    val messageCount: Int = 0,
+    val modelPath: String? = null
 )
 
 @Entity(tableName = "messages")

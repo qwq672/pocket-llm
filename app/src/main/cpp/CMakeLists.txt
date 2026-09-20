@@ -22,13 +22,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 
 # ----- 选项 -----
-# 默认 CPU-only，保证 GitHub Actions（无 GPU SDK / QNN SDK）可直接出包。
-# 本地真机需要 GPU/NPU 时，在 gradle 命令加：
-#   -DPOCKET_VULKAN=ON （需 Vulkan SDK + shaderc/glslc）
-#   -DPOCKET_OPENCL=ON
-#   -DPOCKET_NPU=ON    （需高通 QNN SDK）
-option(POCKET_VULKAN  "Enable Vulkan backend"  OFF)
-option(POCKET_OPENCL  "Enable OpenCL backend"  OFF)
+# 默认开启 Vulkan 和 OpenCL（Android 7+ 几乎所有手机都支持 Vulkan，OpenCL 在 Mali/Adreno GPU 上常见）。
+# CI 不需要传任何参数就能编出支持 GPU 后端的 APK。
+# NPU 仍然 OFF（需要私有高通 QNN SDK）。
+# 本地想强制关掉 GPU 后端时在 gradle 命令加：
+#   -DPOCKET_VULKAN=OFF -DPOCKET_OPENCL=OFF
+option(POCKET_VULKAN  "Enable Vulkan backend"  ON)
+option(POCKET_OPENCL  "Enable OpenCL backend"  ON)
 option(POCKET_NPU     "Enable NPU (HexaGen) backend" OFF)
 
 # ----- 第三方源码目录 -----

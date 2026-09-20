@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Refresh
@@ -89,12 +90,22 @@ import com.pocketllm.data.model.ChatMessage
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun ChatScreen(vm: ChatViewModel = viewModel()) {
+fun ChatScreen(
+    vm: ChatViewModel = viewModel(),
+    sessionId: Long = 0L
+) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val keyboard = LocalSoftwareKeyboardController.current
     val snackbarHost = remember { SnackbarHostState() }
+
+    // 当 sessionId 变化时加载该 session
+    LaunchedEffect(sessionId) {
+        if (sessionId != 0L) vm.loadSession(sessionId)
+    }
     val context = LocalContext.current
+    val drawerState = com.pocketllm.ui.nav.LocalDrawerState.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     // 仅在消息列表 size 变化时滚动到底，避免每个 token 都触发 animateScrollToItem
     LaunchedEffect(ui.messages.size) {
@@ -122,6 +133,11 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(Icons.Outlined.Menu, contentDescription = "菜单")
+                    }
+                },
                 title = {
                     Text(
                         ui.modelName.ifEmpty { "未加载模型" },

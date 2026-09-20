@@ -1,6 +1,7 @@
 package com.pocketllm.di
 
 import android.content.Context
+import com.pocketllm.data.repo.ChatRepository
 import com.pocketllm.data.repo.ModelRepository
 import com.pocketllm.data.repo.SettingsRepository
 import com.pocketllm.domain.download.DownloadManager
@@ -37,6 +38,7 @@ class AppContainer(context: Context) {
 
     val modelRepository: ModelRepository = ModelRepository(appContext)
     val settingsRepository: SettingsRepository = SettingsRepository(appContext)
+    val chatRepository: ChatRepository = ChatRepository(appContext)
     val downloadManager: DownloadManager = DownloadManager(appContext)
 
     /** 三下载源 */

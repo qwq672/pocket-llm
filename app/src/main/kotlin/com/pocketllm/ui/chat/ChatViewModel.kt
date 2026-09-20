@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pocketllm.PocketLLMApp
 import com.pocketllm.data.model.ChatMessage
+import com.pocketllm.data.repo.ChatRepository
 import com.pocketllm.data.repo.SettingsRepository
 import com.pocketllm.domain.inference.InferenceEngine
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +20,7 @@ class ChatViewModel : ViewModel() {
     private val container get() = PocketLLMApp.instance.container
     private val engine: InferenceEngine get() = container.inferenceEngine
     private val settings: SettingsRepository get() = container.settingsRepository
+    private val chatRepo: ChatRepository get() = container.chatRepository
 
     data class UiState(
         val messages: List<ChatMessage> = emptyList(),
@@ -31,7 +33,9 @@ class ChatViewModel : ViewModel() {
         val hasModel: Boolean = false,
         val modelName: String = "",
         val contextUsed: Int = 0,
-        val contextMax: Int = 0
+        val contextMax: Int = 0,
+        val sessionId: Long = 0,
+        val sessionTitle: String = ""
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -69,6 +73,40 @@ class ChatViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 加载指定 session 的历史消息到 UI。如果 sessionId=0 则清空当前对话。
+     */
+    fun loadSession(sessionId: Long) {
+        viewModelScope.launch {
+            if (sessionId == 0L) {
+                _ui.value = _ui.value.copy(messages = emptyList(), sessionId = 0, sessionTitle = "")
+                return@launch
+            }
+            val session = chatRepo.getSession(sessionId)
+            val msgs = chatRepo.getMessages(sessionId)
+            _ui.value = _ui.value.copy(
+                sessionId = sessionId,
+                sessionTitle = session?.title ?: "",
+                messages = msgs
+            )
+            logi("ChatVM: loadSession id=$sessionId msgs=${msgs.size}")
+        }
+    }
+
+    /**
+     * 创建一个新 session 并切换到它。
+     */
+    fun newSession(onCreated: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            val modelPath = engine.state.value.modelPath
+            val title = "新话题 - ${System.currentTimeMillis() % 100000}"
+            val id = chatRepo.createSession(title, modelPath)
+            _ui.value = _ui.value.copy(sessionId = id, sessionTitle = title, messages = emptyList())
+            logi("ChatVM: newSession id=$id")
+            onCreated(id)
+        }
+    }
+
     fun send(text: String) {
         if (_ui.value.streaming) return
         if (text.isBlank()) return
@@ -76,14 +114,38 @@ class ChatViewModel : ViewModel() {
             _ui.value = _ui.value.copy(errorMessage = "尚未加载模型，请先到「模型」页加载")
             return
         }
-        val msg = ChatMessage(role = "user", content = text, sessionId = 0)
+
+        // 如果当前没有 session，自动创建一个
+        var sid = _ui.value.sessionId
+        if (sid == 0L) {
+            // 同步创建 session（在协程里）
+            viewModelScope.launch {
+                val modelPath = engine.state.value.modelPath
+                val title = text.take(20).ifBlank { "新话题" }
+                sid = chatRepo.createSession(title, modelPath)
+                _ui.value = _ui.value.copy(sessionId = sid, sessionTitle = title)
+                continueSend(text, sid)
+            }
+        } else {
+            continueSend(text, sid)
+        }
+    }
+
+    private fun continueSend(text: String, sid: Long) {
+        val msg = ChatMessage(role = "user", content = text, sessionId = sid)
         _ui.value = _ui.value.copy(
             messages = _ui.value.messages + msg,
             streaming = true,
             currentStream = "",
             errorMessage = null
         )
-        logi("ChatViewModel: send ${text.length} chars")
+        logi("ChatViewModel: send ${text.length} chars (sid=$sid)")
+
+        // 持久化 user 消息
+        viewModelScope.launch {
+            runCatching { chatRepo.addMessage(sid, msg) }
+                .onFailure { loge("ChatVM: persist user msg failed", it) }
+        }
 
         viewModelScope.launch {
             val prompt = buildPrompt(_ui.value.messages)
@@ -100,7 +162,7 @@ class ChatViewModel : ViewModel() {
                         val assistant = ChatMessage(
                             role = "assistant",
                             content = collected.toString(),
-                            sessionId = 0,
+                            sessionId = sid,
                             tokensPerSecond = tps
                         )
                         val err = if (reason == "decode_failed" || reason == "callback_error" || reason.startsWith("exception"))
@@ -112,6 +174,11 @@ class ChatViewModel : ViewModel() {
                             errorMessage = err
                         )
                         logi("ChatViewModel: completion stopped reason=$reason tps=$tps")
+                        // 持久化 assistant 消息
+                        viewModelScope.launch {
+                            runCatching { chatRepo.addMessage(sid, assistant) }
+                                .onFailure { loge("ChatVM: persist assistant msg failed", it) }
+                        }
                     }
                 )
             } catch (t: Throwable) {
@@ -127,7 +194,6 @@ class ChatViewModel : ViewModel() {
 
     fun stop() {
         engine.interrupt()
-        // 不立即清空 streaming —— 等 onStop 回调中处理，避免状态不一致
     }
 
     fun clearMessages() {
@@ -135,17 +201,18 @@ class ChatViewModel : ViewModel() {
         _ui.value = _ui.value.copy(messages = emptyList(), errorMessage = null)
     }
 
-    /** 删除单条消息 */
     fun deleteMessage(m: ChatMessage) {
         if (_ui.value.streaming) return
         _ui.value = _ui.value.copy(messages = _ui.value.messages.filterNot { it.ts == m.ts && it.role == m.role })
+        // 同步删除 DB 记录（如果 id > 0）
+        if (m.id > 0) {
+            viewModelScope.launch {
+                runCatching { chatRepo.deleteMessage(m.id) }
+                    .onFailure { loge("ChatVM: delete msg failed", it) }
+            }
+        }
     }
 
-    /**
-     * 重新生成最后一条 assistant 回复：
-     * 移除最后一条 assistant，然后基于现有对话历史重新调用 engine.completion。
-     * 如果最后一条不是 assistant，啥也不做。
-     */
     fun regenerate() {
         if (_ui.value.streaming) return
         val msgs = _ui.value.messages
@@ -175,7 +242,7 @@ class ChatViewModel : ViewModel() {
                         val assistant = ChatMessage(
                             role = "assistant",
                             content = collected.toString(),
-                            sessionId = 0,
+                            sessionId = _ui.value.sessionId,
                             tokensPerSecond = tps
                         )
                         _ui.value = _ui.value.copy(
@@ -184,6 +251,12 @@ class ChatViewModel : ViewModel() {
                             currentStream = ""
                         )
                         logi("ChatViewModel: regenerate stopped reason=$reason tps=$tps")
+                        if (_ui.value.sessionId != 0L) {
+                            viewModelScope.launch {
+                                runCatching { chatRepo.addMessage(_ui.value.sessionId, assistant) }
+                                    .onFailure { loge("ChatVM: persist regenerate msg failed", it) }
+                            }
+                        }
                     }
                 )
             } catch (t: Throwable) {
@@ -210,7 +283,6 @@ class ChatViewModel : ViewModel() {
     private fun buildPrompt(msgs: List<ChatMessage>): String {
         val sb = StringBuilder()
         val effectiveSystem = if (systemPrompt.isBlank()) {
-            // 默认不强制 system prompt，让 /think 标志自己发挥作用
             if (thinkingMode) "/think" else "/no_think"
         } else {
             val flag = if (thinkingMode) "/think" else "/no_think"

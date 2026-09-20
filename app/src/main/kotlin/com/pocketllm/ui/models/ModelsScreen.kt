@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Verified
 import androidx.compose.material3.AlertDialog
@@ -104,9 +105,17 @@ fun ModelsScreen(
         }
     }
 
+    val drawerState = com.pocketllm.ui.nav.LocalDrawerState.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(Icons.Outlined.Menu, contentDescription = "菜单")
+                    }
+                },
                 title = { Text("模型", style = MaterialTheme.typography.titleLarge) }
             )
         },

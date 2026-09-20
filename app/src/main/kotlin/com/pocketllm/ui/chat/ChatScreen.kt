@@ -448,6 +448,7 @@ private fun BouncingDot(delay: Int) {
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     m: ChatMessage,

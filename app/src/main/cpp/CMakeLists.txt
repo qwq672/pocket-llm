@@ -22,13 +22,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 
 # ----- 选项 -----
-# 默认开启 Vulkan 和 OpenCL（Android 7+ 几乎所有手机都支持 Vulkan，OpenCL 在 Mali/Adreno GPU 上常见）。
-# CI 不需要传任何参数就能编出支持 GPU 后端的 APK。
-# NPU 仍然 OFF（需要私有高通 QNN SDK）。
-# 本地想强制关掉 GPU 后端时在 gradle 命令加：
-#   -DPOCKET_VULKAN=OFF -DPOCKET_OPENCL=OFF
+# Vulkan 默认 ON：Android 7+ 几乎所有手机都支持，CI 装 SPIRV-Headers 即可编译。
+# OpenCL 默认 OFF：需要 OpenCL SDK（headers + lib），CI 没装。
+#   本地想开 OpenCL 时，确保系统有 OpenCL headers (cl.h) 和 libOpenCL.so，
+#   然后 -DPOCKET_OPENCL=ON。
+# NPU 默认 OFF：需要私有高通 QNN SDK。
 option(POCKET_VULKAN  "Enable Vulkan backend"  ON)
-option(POCKET_OPENCL  "Enable OpenCL backend"  ON)
+option(POCKET_OPENCL  "Enable OpenCL backend"  OFF)
 option(POCKET_NPU     "Enable NPU (HexaGen) backend" OFF)
 
 # SPIRV-Headers 安装到 /usr/local/share/cmake/SPIRV-Headers/（CI 里 install 的）

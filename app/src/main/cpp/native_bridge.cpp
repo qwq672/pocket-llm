@@ -79,6 +79,10 @@ static llama_context*   g_ctx    = nullptr;
 static const llama_vocab* g_vocab = nullptr;
 static std::atomic<bool> g_interrupt{false};
 static std::atomic<int>  g_ctx_used{0};
+// KV cache 中已 eval 的 token 数（用于增量 eval，避免每次都从头重新 tokenize+eval）
+static int g_n_past_total = 0;
+// 上次 completion 用的完整 prompt（用于检测 prompt 前缀是否变化，变化则重置 KV cache）
+static std::string g_last_prompt;
 
 // g_vm 已在文件早期声明（native_log 之前），这里不再重复
 
@@ -217,6 +221,8 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaUnload(JNIEnv*, jclass) {
     g_vocab = nullptr;
     bridge_set_vocab(nullptr);
     g_ctx_used.store(0);
+    g_n_past_total = 0;
+    g_last_prompt.clear();
     g_pool.releaseAll();
     LOGI("unloaded");
 }
@@ -301,27 +307,45 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
         return;
     }
     std::string sp(prompt);
-    LOGI("llamaCompletion: prompt_len=%zu  ctx=%p", sp.size(), (void*)g_ctx);
+    LOGI("llamaCompletion: prompt_len=%zu  ctx=%p  n_past_total=%d  last_len=%zu",
+         sp.size(), (void*)g_ctx, g_n_past_total, g_last_prompt.size());
 
     // 锁住全局状态，避免 unload 与生成并发
     std::lock_guard<std::mutex> lk(g_mutex);
     env->ReleaseStringUTFChars(jprompt, prompt);
 
     g_interrupt.store(false);
-    g_ctx_used.store(0);
 
-    // 清空 KV cache（v0.4.1 用 llama_memory_clear）
-    if (g_ctx) {
-        llama_memory_t mem = llama_get_memory(g_ctx);
-        if (mem) {
-            llama_memory_clear(mem, true);
-            LOGI("llamaCompletion: KV cleared");
-        } else {
-            LOGE("llamaCompletion: llama_get_memory returned null, KV not cleared");
-        }
+    // 判断是否需要清空 KV cache 重头 eval：
+    // 1. 当前 prompt 不是上次 prompt 的前缀扩展（即前缀变化或缩短）
+    // 2. 当前 prompt 为空
+    // 否则增量 eval：跳过前 g_n_past_total 个 token，只 eval 新增部分。
+    bool need_clear = false;
+    if (sp.empty()) {
+        need_clear = true;
+        LOGI("llamaCompletion: empty prompt, clear KV");
+    } else if (g_n_past_total == 0) {
+        need_clear = false;  // 第一次，无需 clear
+    } else if (sp.size() < g_last_prompt.size() ||
+               sp.compare(0, g_last_prompt.size(), g_last_prompt) != 0) {
+        // 前缀不匹配（比如用户改了 system prompt 或清空了对话），重置
+        need_clear = true;
+        LOGI("llamaCompletion: prompt prefix changed, clear KV (last_len=%zu new_len=%zu)",
+             g_last_prompt.size(), sp.size());
+    } else {
+        LOGI("llamaCompletion: incremental eval (skip %d tokens, eval %zu new tokens)",
+             g_n_past_total, sp.size() - g_last_prompt.size());
     }
 
-    // tokenize
+    if (need_clear) {
+        llama_memory_t mem = llama_get_memory(g_ctx);
+        if (mem) llama_memory_clear(mem, true);
+        g_n_past_total = 0;
+        g_ctx_used.store(0);
+    }
+    g_last_prompt = sp;
+
+    // tokenize 整个 prompt
     std::vector<llama_token> tokens;
     {
         int32_t n = llama_tokenize(g_vocab, sp.c_str(), (int32_t)sp.size(),
@@ -333,7 +357,8 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
         if (actual < 0) actual = -actual;
         tokens.resize((size_t)actual);
     }
-    LOGI("llamaCompletion: tokens=%zu", tokens.size());
+    LOGI("llamaCompletion: total_tokens=%zu  skip=%d  eval=%zu",
+         tokens.size(), g_n_past_total, (size_t)(tokens.size() > (size_t)g_n_past_total ? tokens.size() - g_n_past_total : 0));
     if (tokens.empty()) {
         call_string_cb(env, stopCb, "empty_tokens");
         return;
@@ -342,15 +367,21 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
     const int maxCtx = (int)llama_n_ctx(g_ctx);
     if ((int)tokens.size() > maxCtx - 4) {
         tokens.erase(tokens.begin(), tokens.end() - (maxCtx - 4));
+        // 截断后 KV cache 中的 token 和新 prompt 不再匹配，必须清空
+        llama_memory_t mem = llama_get_memory(g_ctx);
+        if (mem) llama_memory_clear(mem, true);
+        g_n_past_total = 0;
+        g_ctx_used.store(0);
+        LOGI("llamaCompletion: prompt truncated, KV cleared");
     }
 
     std::string stop_reason = "stop";
     bool stopped = false;
+    int n_past = g_n_past_total;  // 从上次结束的位置开始
 
-    // 1. prompt 阶段：分批 eval
-    int n_past = 0;
-    LOGI("llamaCompletion: prompt eval begin");
-    for (size_t i = 0; i < tokens.size(); i += 256) {
+    // 1. prompt 阶段：只 eval 新增的 token（跳过前 g_n_past_total 个）
+    LOGI("llamaCompletion: prompt eval begin, skip %d tokens", g_n_past_total);
+    for (size_t i = (size_t)g_n_past_total; i < tokens.size(); i += 256) {
         if (g_interrupt.load()) { stop_reason = "interrupted"; stopped = true; break; }
         int n = std::min((int)256, (int)(tokens.size() - i));
         llama_batch batch = llama_batch_get_one(&tokens[i], n);
@@ -362,6 +393,7 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
         n_past += n;
         g_ctx_used.store(n_past);
     }
+    g_n_past_total = n_past;
     LOGI("llamaCompletion: prompt eval done, n_past=%d", n_past);
 
     // 2. generation 阶段
@@ -389,6 +421,7 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
                 stop_reason = "decode_failed"; break;
             }
             n_past++;
+            g_n_past_total = n_past;
             g_ctx_used.store(n_past);
             if (n_past >= maxCtx - 1) { stop_reason = "length"; break; }
         }

@@ -38,10 +38,14 @@ class ChatViewModel : ViewModel() {
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
     @Volatile private var systemPrompt: String = ""
+    @Volatile private var thinkingMode: Boolean = true
 
     init {
         viewModelScope.launch {
             settings.config.collectLatest { systemPrompt = it.systemPrompt }
+        }
+        viewModelScope.launch {
+            settings.thinkingMode.collectLatest { thinkingMode = it }
         }
         viewModelScope.launch {
             engine.stats.collectLatest { s ->
@@ -197,12 +201,22 @@ class ChatViewModel : ViewModel() {
         _ui.value = _ui.value.copy(errorMessage = null)
     }
 
-    /** 简化版 prompt 模板，按对话角色拼接 */
+    /**
+     * 构造聊天 prompt。
+     * - 如果 thinkingMode=true，在 system prompt 末尾加 "/think" 标志（Qwen3 支持）
+     * - 如果用户没设 system prompt，且 thinkingMode=true，自动加默认 prompt + /think
+     * - 如果 thinkingMode=false，加 /no_think 标志
+     */
     private fun buildPrompt(msgs: List<ChatMessage>): String {
         val sb = StringBuilder()
-        if (systemPrompt.isNotBlank()) {
-            sb.append("System: ").append(systemPrompt.trim()).append("\n\n")
+        val effectiveSystem = if (systemPrompt.isBlank()) {
+            // 默认不强制 system prompt，让 /think 标志自己发挥作用
+            if (thinkingMode) "/think" else "/no_think"
+        } else {
+            val flag = if (thinkingMode) "/think" else "/no_think"
+            "${systemPrompt.trim()}\n$flag"
         }
+        sb.append("System: ").append(effectiveSystem).append("\n\n")
         for (m in msgs) {
             when (m.role) {
                 "user"      -> sb.append("User: ").append(m.content).append("\n")

@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Warning
@@ -330,7 +331,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
-                    Column(Modifier.padding(16.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = cfg.systemPrompt,
                             onValueChange = { vm.update(cfg.copy(systemPrompt = it)) },
@@ -340,6 +341,16 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
                             minLines = 2,
                             maxLines = 5,
                             shape = MaterialTheme.shapes.small
+                        )
+                        HorizontalDivider()
+                        ListItem(
+                            headlineContent = { Text("思考模式") },
+                            supportingContent = { Text(
+                                "开启后默认让模型进入思考模式（Qwen3 /think 标志）。" +
+                                "支持的模型会先输出思考过程再回答。" +
+                                "关闭则用 /no_think 标志强制不思考，更快但质量略降。") },
+                            trailingContent = { Switch(checked = ui.thinkingMode, onCheckedChange = vm::onThinkingModeChange) },
+                            leadingContent = { Icon(Icons.Outlined.Psychology, contentDescription = null, modifier = Modifier.size(24.dp)) }
                         )
                     }
                 }

@@ -37,6 +37,8 @@ class SettingsRepository(private val context: Context) {
         val DYNAMIC_COLOR   = booleanPreferencesKey("dynamic_color")
         val DARK_THEME      = stringPreferencesKey("dark_theme") // "system" / "light" / "dark"
         val LOGGING_ENABLED = booleanPreferencesKey("logging_enabled")
+        // 思考模式开关（默认 true）
+        val THINKING_MODE   = booleanPreferencesKey("thinking_mode")
     }
 
     val config: Flow<InferenceConfig> = context.dataStore.data.map { p ->
@@ -61,6 +63,7 @@ class SettingsRepository(private val context: Context) {
     val downloadSource: Flow<String> = context.dataStore.data.map { it[Keys.DOWNLOAD_SOURCE] ?: "hf_mirror" }
     val language: Flow<String> = context.dataStore.data.map { it[Keys.LANGUAGE] ?: "zh" }
     val lastModelId: Flow<Long> = context.dataStore.data.map { (it[Keys.LAST_MODEL_ID] ?: -1L).toLong() }
+    val thinkingMode: Flow<Boolean> = context.dataStore.data.map { it[Keys.THINKING_MODE] ?: true }
 
     /** Material You 取色 */
     val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[Keys.DYNAMIC_COLOR] ?: true }
@@ -105,4 +108,7 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setLoggingEnabled(on: Boolean) =
         context.dataStore.edit { it[Keys.LOGGING_ENABLED] = on }
+
+    suspend fun setThinkingMode(on: Boolean) =
+        context.dataStore.edit { it[Keys.THINKING_MODE] = on }
 }

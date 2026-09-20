@@ -29,6 +29,7 @@ class SettingsViewModel : ViewModel() {
         val darkTheme: String = "system",
         val loggingEnabled: Boolean = true,
         val logFilePath: String? = null,
+        val thinkingMode: Boolean = true,
         // 可用后端
         val vulkanAvailable: Boolean = false,
         val npuAvailable: Boolean = false,
@@ -59,6 +60,11 @@ class SettingsViewModel : ViewModel() {
                 _ui.value = _ui.value.copy(loggingEnabled = it)
                 // silent=true 避免 DataStore flow emit 触发 AppLogger 写 log 反过来又触发 UI 刷新
                 AppLogger.setEnabled(it, silent = true)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.thinkingMode.collectLatest {
+                _ui.value = _ui.value.copy(thinkingMode = it)
             }
         }
         viewModelScope.launch {
@@ -111,6 +117,10 @@ class SettingsViewModel : ViewModel() {
 
     fun onLoggingEnabledChange(on: Boolean) {
         viewModelScope.launch { container.settingsRepository.setLoggingEnabled(on) }
+    }
+
+    fun onThinkingModeChange(on: Boolean) {
+        viewModelScope.launch { container.settingsRepository.setThinkingMode(on) }
     }
 
     fun clearLog() {

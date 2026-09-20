@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.os.PowerManager
 import android.util.Log
-import com.pocketllm.util.AppLogger.Companion
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,7 +36,7 @@ class ThermalMonitor {
     fun start() {
         if (job?.isActive == true) return
         sysfsPaths = findAllTempZones()
-        pm = (Companion.appContext?.getSystemService(Context.POWER_SERVICE) as? PowerManager)
+        pm = (appContext?.getSystemService(Context.POWER_SERVICE) as? PowerManager)
         logi("ThermalMonitor start: sysfs_zones=${sysfsPaths.size} pm=${if (pm != null) "yes" else "no"}")
         job = CoroutineScope(Dispatchers.IO).launch {
             while (true) {
@@ -83,7 +82,7 @@ class ThermalMonitor {
     }
 
     /**
-     * 扫描所有 thermal_zone，按 type 选 CPU / SKIN / GPU 的，并按温度从高到低排序。
+     * 扫描所有 thermal_zone，按温度从高到低排序。
      * 优先用 CPU zone（推理主要热源），其次 SKIN（手机表面温度）。
      */
     private fun findAllTempZones(): List<String> {
@@ -108,3 +107,4 @@ class ThermalMonitor {
         @Volatile var appContext: Context? = null
     }
 }
+

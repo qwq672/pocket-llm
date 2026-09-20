@@ -112,6 +112,11 @@ jobs:
           ls $NDK_VULKAN/vulkan.hpp
           ls $NDK_VULKAN/vulkan_core.h
           ls $NDK_SPIRV/unified1/spirv.hpp
+          # vulkan.hpp 期望 VK_HEADER_VERSION == 362，但 vulkan_core.h 是 363。
+          # 把 vulkan_core.h 的版本号改成 362 匹配 vulkan.hpp（API 完全兼容）。
+          HPP_VER=$(grep -E 'static_assert.*VK_HEADER_VERSION ==' $NDK_VULKAN/vulkan.hpp | head -1 | grep -oE '== [0-9]+' | grep -oE '[0-9]+')
+          echo "vulkan.hpp expects VK_HEADER_VERSION = $HPP_VER"
+          sudo sed -i "s/#define VK_HEADER_VERSION [0-9]*/#define VK_HEADER_VERSION $HPP_VER/" $NDK_VULKAN/vulkan_core.h
           grep -E 'define VK_HEADER_VERSION ' $NDK_VULKAN/vulkan_core.h || true
 
       - name: Cache Gradle wrapper and build outputs

@@ -82,7 +82,7 @@ jobs:
           # - SPIRV-Headers: spirv/ 目录（ggml-vulkan.cpp 还 include <spirv/unified1/spirv.hpp>）
           # 三者复制到 NDK sysroot include，让 NDK clang++ 能找到。
           # Vulkan-Headers 和 Vulkan-Hpp 的 main 分支 VK_HEADER_VERSION 可能差 1-2，
-          # 用 sed 把 vulkan.hpp 的版本号同步成 vulkan_core.h 的实际版本。
+          # VULKAN_HPP_NO_VERSION_CHECK define 跳过版本检查（API 兼容）。
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers /tmp/vulkan-headers
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Hpp /tmp/vulkan-hpp
           git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers-2
@@ -101,22 +101,18 @@ jobs:
           sudo rm -rf $NDK_VK_VIDEO
           sudo mkdir -p $NDK_VK_VIDEO
           sudo cp -r /tmp/vulkan-headers/include/vk_video/* $NDK_VK_VIDEO/ 2>/dev/null || true
-          # 覆盖 spirv/ 目录（SPIRV-Headers 仓库结构：include/spirv/*）
+          # 覆盖 spirv/ 目录（SPIRV-Headers 仓库 include/spirv/unified1/spirv.hpp）
           sudo rm -rf $NDK_SPIRV
-          sudo mkdir -p $NDK_SPIRV/unified1
-          sudo cp -r /tmp/spirv-headers-2/include/spirv/* $NDK_SPIRV/unified1/ 2>/dev/null || true
+          sudo mkdir -p $NDK_SPIRV
+          sudo cp -r /tmp/spirv-headers-2/include/spirv/* $NDK_SPIRV/
           # 恢复 vulkan_android.h
           if [ ! -f $NDK_VULKAN/vulkan_android.h ] && [ -f /tmp/vulkan_android.h.bak ]; then
             sudo cp /tmp/vulkan_android.h.bak $NDK_VULKAN/vulkan_android.h
           fi
-          # 同步 vulkan.hpp 的 VK_HEADER_VERSION 到 vulkan_core.h 的实际版本
-          CORE_VER=$(grep -E 'define VK_HEADER_VERSION ' $NDK_VULKAN/vulkan_core.h | awk '{print $3}')
-          echo "vulkan_core.h VK_HEADER_VERSION = $CORE_VER"
-          sudo sed -i "s/static_assert(VK_HEADER_VERSION == [0-9]*/static_assert(VK_HEADER_VERSION == $CORE_VER/" $NDK_VULKAN/vulkan.hpp
-          grep -E 'static_assert.VK_HEADER_VERSION' $NDK_VULKAN/vulkan.hpp | head -1 || true
           ls $NDK_VULKAN/vulkan.hpp
           ls $NDK_VULKAN/vulkan_core.h
-          ls $NDK_SPIRV/unified1/spirv.hpp 2>/dev/null || echo "no spirv.hpp"
+          ls $NDK_SPIRV/unified1/spirv.hpp
+          grep -E 'define VK_HEADER_VERSION ' $NDK_VULKAN/vulkan_core.h || true
 
       - name: Cache Gradle wrapper and build outputs
         uses: actions/cache@v4

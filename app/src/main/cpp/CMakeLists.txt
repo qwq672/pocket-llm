@@ -91,6 +91,10 @@ if(POCKET_VULKAN)
     find_library(VULKAN_LIB vulkan REQUIRED)
     target_link_libraries(pocketllm PRIVATE ${VULKAN_LIB})
     target_compile_definitions(pocketllm PRIVATE POCKET_VULKAN=1)
+    # Vulkan-Headers 和 Vulkan-Hpp 版本可能差 1-2，跳过版本检查
+    target_compile_definitions(pocketllm PRIVATE VULKAN_HPP_NO_VERSION_CHECK)
+    # llama.cpp 子构建也跳过版本检查（通过 CMAKE_CXX_FLAGS 传递）
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DVULKAN_HPP_NO_VERSION_CHECK" CACHE STRING "" FORCE)
 endif()
 
 # OpenCL 系统库

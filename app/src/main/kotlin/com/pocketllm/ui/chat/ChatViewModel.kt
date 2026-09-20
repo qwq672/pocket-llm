@@ -131,6 +131,68 @@ class ChatViewModel : ViewModel() {
         _ui.value = _ui.value.copy(messages = emptyList(), errorMessage = null)
     }
 
+    /** 删除单条消息 */
+    fun deleteMessage(m: ChatMessage) {
+        if (_ui.value.streaming) return
+        _ui.value = _ui.value.copy(messages = _ui.value.messages.filterNot { it.ts == m.ts && it.role == m.role })
+    }
+
+    /**
+     * 重新生成最后一条 assistant 回复：
+     * 移除最后一条 assistant，然后基于现有对话历史重新调用 engine.completion。
+     * 如果最后一条不是 assistant，啥也不做。
+     */
+    fun regenerate() {
+        if (_ui.value.streaming) return
+        val msgs = _ui.value.messages
+        if (msgs.isEmpty()) return
+        val last = msgs.last()
+        if (last.role != "assistant") return
+        val withoutLast = msgs.dropLast(1)
+        _ui.value = _ui.value.copy(
+            messages = withoutLast,
+            streaming = true,
+            currentStream = "",
+            errorMessage = null
+        )
+        logi("ChatViewModel: regenerate")
+        viewModelScope.launch {
+            val prompt = buildPrompt(withoutLast)
+            val collected = StringBuilder()
+            try {
+                engine.completion(
+                    prompt = prompt,
+                    onToken = { tok ->
+                        collected.append(tok)
+                        _ui.value = _ui.value.copy(currentStream = collected.toString())
+                    },
+                    onStop = { reason ->
+                        val tps = engine.stats.value.tokensPerSecond
+                        val assistant = ChatMessage(
+                            role = "assistant",
+                            content = collected.toString(),
+                            sessionId = 0,
+                            tokensPerSecond = tps
+                        )
+                        _ui.value = _ui.value.copy(
+                            messages = _ui.value.messages + assistant,
+                            streaming = false,
+                            currentStream = ""
+                        )
+                        logi("ChatViewModel: regenerate stopped reason=$reason tps=$tps")
+                    }
+                )
+            } catch (t: Throwable) {
+                loge("ChatViewModel: regenerate threw", t)
+                _ui.value = _ui.value.copy(
+                    streaming = false,
+                    currentStream = "",
+                    errorMessage = "重新生成异常: ${t.message}"
+                )
+            }
+        }
+    }
+
     fun dismissError() {
         _ui.value = _ui.value.copy(errorMessage = null)
     }

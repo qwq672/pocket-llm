@@ -8,6 +8,8 @@ import com.pocketllm.domain.inference.InferenceConfig
 import com.pocketllm.infra.jni.NativeBridge
 import com.pocketllm.util.AppLogger
 import com.pocketllm.util.CpuInfo
+import com.pocketllm.util.loge
+import com.pocketllm.util.logi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -62,20 +64,27 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             runCatching { container.nativeBridge.nativeVersion() }
                 .onSuccess { _ui.value = _ui.value.copy(nativeVersion = it) }
-                .onFailure { _ui.value = _ui.value.copy(nativeVersion = "native not loaded") }
+                .onFailure {
+                    _ui.value = _ui.value.copy(nativeVersion = "native not loaded")
+                    loge("nativeVersion() failed", it)
+                }
         }
         _ui.value = _ui.value.copy(
             socName = CpuInfo.socName,
             bigCores = CpuInfo.bigCores,
             logFilePath = AppLogger.filePath()
         )
-        // 探测后端可用性
+        // 探测后端可用性（加日志便于诊断 N/A 问题）
         viewModelScope.launch {
             val b = container.nativeBridge
+            val v = runCatching { b.vulkanAvailable() }.getOrDefault(false)
+            val n = runCatching { b.npuAvailable() }.getOrDefault(false)
+            val o = runCatching { b.openclAvailable() }.getOrDefault(false)
+            logi("SettingsVM backend probe: vulkan=$v npu=$n opencl=$o native=${_ui.value.nativeVersion}")
             _ui.value = _ui.value.copy(
-                vulkanAvailable = runCatching { b.vulkanAvailable() }.getOrDefault(false),
-                npuAvailable    = runCatching { b.npuAvailable() }.getOrDefault(false),
-                openclAvailable = runCatching { b.openclAvailable() }.getOrDefault(false)
+                vulkanAvailable = v,
+                npuAvailable    = n,
+                openclAvailable = o
             )
         }
     }

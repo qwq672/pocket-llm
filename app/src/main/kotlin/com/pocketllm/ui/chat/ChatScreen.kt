@@ -14,6 +14,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,9 +40,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.SwapHoriz
@@ -118,44 +123,43 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
+                    Text(
+                        ui.modelName.ifEmpty { "未加载模型" },
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                },
+                actions = {
+                    // 紧凑的 stats 行：backend · tps · ctx
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(end = 4.dp)
+                    ) {
                         Text(
-                            ui.modelName.ifEmpty { "未加载模型" },
-                            style = MaterialTheme.typography.titleLarge,
-                            maxLines = 1,
-                            fontWeight = FontWeight.SemiBold
+                            ui.backendName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (ui.tokensPerSecond > 0) {
+                            Dot()
                             Text(
-                                ui.backendName,
+                                "%.1ft/s".format(ui.tokensPerSecond),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        if (ui.contextMax > 0) {
+                            Dot()
+                            Text(
+                                "${formatCtx(ui.contextUsed)}/${formatCtx(ui.contextMax)}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            if (ui.tokensPerSecond > 0) {
-                                Spacer(Modifier.width(6.dp))
-                                Dot()
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    "%.1f tok/s".format(ui.tokensPerSecond),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                            if (ui.contextMax > 0) {
-                                Spacer(Modifier.width(6.dp))
-                                Dot()
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    "${formatCtx(ui.contextUsed)}/${formatCtx(ui.contextMax)}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
                         }
                     }
-                },
-                actions = {
                     ThermalPill(percent = ui.thermalPercent)
                     Box {
                         IconButton(onClick = { menuOpen = true }) {
@@ -211,7 +215,19 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(items = ui.messages, key = { m -> "${m.id}-${m.ts}" }) { m ->
-                        MessageBubble(m)
+                        MessageBubble(
+                            m,
+                            onCopy = {
+                                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                        as android.content.ClipboardManager
+                                cm.setPrimaryClip(android.content.ClipData.newPlainText("PocketLLM", m.content))
+                                Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                            },
+                            onRegenerate = if (m.role == "assistant") {
+                                { vm.regenerate() }
+                            } else null,
+                            onDelete = { vm.deleteMessage(m) }
+                        )
                     }
                     if (ui.currentStream.isNotEmpty()) {
                         item(key = "stream") {
@@ -269,6 +285,32 @@ private fun Dot() {
 
 @Composable
 private fun ThermalPill(percent: Int) {
+    // percent < 0 表示未读到温度，显示 "—" 而不是误导性的 "0%"
+    if (percent < 0) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = MaterialTheme.shapes.small
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.Thermostat,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    "—",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
     val color = when {
         percent >= 85 -> MaterialTheme.colorScheme.error
         percent >= 70 -> MaterialTheme.colorScheme.tertiary
@@ -407,12 +449,19 @@ private fun BouncingDot(delay: Int) {
 }
 
 @Composable
-private fun MessageBubble(m: ChatMessage, animate: Boolean = false) {
+private fun MessageBubble(
+    m: ChatMessage,
+    animate: Boolean = false,
+    onCopy: () -> Unit = {},
+    onRegenerate: (() -> Unit)? = null,
+    onDelete: () -> Unit = {}
+) {
     val isUser = m.role == "user"
     val bubbleColor = if (isUser) MaterialTheme.colorScheme.primary
                       else MaterialTheme.colorScheme.surfaceContainerHigh
     val onBubbleColor = if (isUser) MaterialTheme.colorScheme.onPrimary
                         else MaterialTheme.colorScheme.onSurface
+    var menuOpen by remember { mutableStateOf(false) }
 
     Row(
         Modifier
@@ -429,19 +478,47 @@ private fun MessageBubble(m: ChatMessage, animate: Boolean = false) {
             )
             Spacer(Modifier.width(8.dp))
         }
-        Surface(
-            color = bubbleColor,
-            shape = bubbleShape(isUser),
-            modifier = Modifier
-                .widthIn(max = 320.dp)
-                .then(if (animate) Modifier.animateContentSize(animationSpec = tween(120)) else Modifier)
-        ) {
-            Text(
-                m.content,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                color = onBubbleColor,
-                style = MaterialTheme.typography.bodyMedium
-            )
+        Box {
+            Surface(
+                color = bubbleColor,
+                shape = bubbleShape(isUser),
+                modifier = Modifier
+                    .widthIn(max = 320.dp)
+                    .then(if (animate) Modifier.animateContentSize(animationSpec = tween(120)) else Modifier)
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { menuOpen = true }
+                    )
+            ) {
+                Text(
+                    m.content,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    color = onBubbleColor,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("复制") },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    onClick = { menuOpen = false; onCopy() }
+                )
+                if (onRegenerate != null) {
+                    DropdownMenuItem(
+                        text = { Text("重新生成") },
+                        leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        onClick = { menuOpen = false; onRegenerate() }
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error) },
+                    onClick = { menuOpen = false; onDelete() }
+                )
+            }
         }
         if (isUser) {
             Spacer(Modifier.width(8.dp))

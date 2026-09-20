@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.os.PowerManager
 import android.util.Log
+import com.pocketllm.util.AppLogger.Companion
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,23 +18,27 @@ import java.io.File
 /**
  * 热感知监控。
  *
- * 数据来源（按优先级）：
- * 1. PowerManager.THERMAL_STATUS_* （API 29+，最权威但分辨率低）
- * 2. /sys/class/thermal/thermal_zoneN/temp （sysfs，分辨率高）
+ * 数据来源（按优先级，取先拿到的）：
+ * 1. /sys/class/thermal/thermal_zoneN/temp（sysfs，分辨率高，需扫描所有 zone 找 CPU/SKIN）
+ * 2. PowerManager.currentThermalStatus（API 29+，离散等级 0-6）
  *
- * 只读，不写、不强制降温。给 [ThermalGovernor] 用。
+ * 如果都拿不到，返回 -1，UI 显示 "热度 —" 而不是误导性的 "热度 0%"。
  */
 class ThermalMonitor {
 
-    private val _thermalPercent = MutableStateFlow(0)
+    /** -1 = 未读到，0..100 = 热档位 */
+    private val _thermalPercent = MutableStateFlow(-1)
     val thermalPercent: StateFlow<Int> = _thermalPercent.asStateFlow()
 
     private var job: Job? = null
-    private var sysfsPath: String? = null
+    private var sysfsPaths: List<String> = emptyList()
+    @Volatile private var pm: PowerManager? = null
 
     fun start() {
         if (job?.isActive == true) return
-        sysfsPath = findCpuTempZone()
+        sysfsPaths = findAllTempZones()
+        pm = (Companion.appContext?.getSystemService(Context.POWER_SERVICE) as? PowerManager)
+        logi("ThermalMonitor start: sysfs_zones=${sysfsPaths.size} pm=${if (pm != null) "yes" else "no"}")
         job = CoroutineScope(Dispatchers.IO).launch {
             while (true) {
                 _thermalPercent.value = readPercent()
@@ -49,39 +54,54 @@ class ThermalMonitor {
 
     fun thermalPercent(): Int = _thermalPercent.value
 
-    /**
-     * 综合 PowerManager + sysfs 读出 0-100 的热档位。
-     * PowerManager 给的是离散等级（0~6），sysfs 给连续值。
-     */
     private fun readPercent(): Int {
-        // 1. sysfs（更细）
-        val sysPercent = sysfsPath?.let { p ->
+        // 1. sysfs（分辨率高，优先）
+        for (path in sysfsPaths) {
             try {
-                val raw = File(p).readText().trim()
-                // 通常是毫摄氏度，例如 45000 = 45°C
+                val raw = File(path).readText().trim()
+                if (raw.isEmpty() || raw == "0") continue
                 val milli = raw.toLong()
+                if (milli <= 0) continue
                 val celsius = milli / 1000.0
-                // 经验阈值：35°C=0%, 60°C=100%
-                ((celsius - 35) * 100 / 25).toInt().coerceIn(0, 100)
+                // 35°C=0%, 65°C=100%（手机 CPU 满载通常到 60-70°C）
+                val pct = ((celsius - 35) * 100 / 30).toInt().coerceIn(0, 100)
+                if (pct >= 0) return pct
+            } catch (_: Exception) { /* try next */ }
+        }
+
+        // 2. PowerManager.currentThermalStatus (API 29+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val pm = this.pm ?: return -1
+            return try {
+                val status = pm.currentThermalStatus
+                // THERMAL_STATUS_NONE=0, LIGHT=1, MODERATE=2, SEVERE=3, CRITICAL=4, EMERGENCY=5, SHUTDOWN=6
+                (status * 100 / 6).coerceIn(0, 100)
             } catch (_: Exception) { -1 }
-        } ?: -1
+        }
 
-        if (sysPercent >= 0) return sysPercent
-
-        // 2. 没有可用 thermal zone 时按常温处理（PowerManager.getThermalStatus 为 API 29+，
-        //    且部分设备 sysfs 权限受限，这里不强制依赖，直接返回 0）。
-        return 0
+        return -1
     }
 
-    private fun findCpuTempZone(): String? {
-        // 试几个常见路径
-        val candidates = listOf(
-            "/sys/class/thermal/thermal_zone0/temp",
-            "/sys/class/thermal/thermal_zone1/temp",
-            "/sys/class/thermal/thermal_zone2/temp",
-            "/sys/devices/virtual/thermal/thermal_zone0/temp"
-        )
-        return candidates.firstOrNull { File(it).exists() }
+    /**
+     * 扫描所有 thermal_zone，按 type 选 CPU / SKIN / GPU 的，并按温度从高到低排序。
+     * 优先用 CPU zone（推理主要热源），其次 SKIN（手机表面温度）。
+     */
+    private fun findAllTempZones(): List<String> {
+        val base = File("/sys/class/thermal")
+        if (!base.exists()) return emptyList()
+        val zones = base.listFiles { f -> f.isDirectory && f.name.startsWith("thermal_zone") }
+            ?: return emptyList()
+        return zones.mapNotNull { zone ->
+            try {
+                val tempFile = File(zone, "temp")
+                val typeFile = File(zone, "type")
+                if (!tempFile.exists()) return@mapNotNull null
+                val temp = tempFile.readText().trim().toLongOrNull() ?: return@mapNotNull null
+                if (temp <= 0) return@mapNotNull null
+                val type = if (typeFile.exists()) typeFile.readText().trim().lowercase() else ""
+                Triple(tempFile.absolutePath, type, temp)
+            } catch (_: Exception) { null }
+        }.sortedByDescending { it.third }.map { it.first }
     }
 
     companion object {

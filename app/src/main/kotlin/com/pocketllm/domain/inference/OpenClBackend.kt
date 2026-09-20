@@ -26,9 +26,9 @@ class OpenClBackend(
 
     override suspend fun load(modelPath: String, config: InferenceConfig): Boolean = withContext(Dispatchers.Default) {
         val threads = config.effectiveThreads(cpuInfo.bigCores)
-        // 关键：llama.cpp 通过 nGpuLayers > 0 启用 GPU 后端，nGpuLayers=0 时全部 CPU。
-        // 用户选 OpenCL 但 nGpuLayers=0 等于白选，这里自动给一个合理默认（99 = 尽量 offload）。
-        val gpuLayers = if (config.nGpuLayers == 0) 99 else config.nGpuLayers
+        // nGpuLayers=0 (UI 显示「自动」) 时给一个保守默认值 12，
+        // 同 VulkanBackend 理由；OpenCL 在 Mali/Adreno GPU 上 12 层比较稳定。
+        val gpuLayers = if (config.nGpuLayers == 0) 12 else config.nGpuLayers
         val ok = native.llamaLoad(
             modelPath = modelPath,
             backend = type.id,

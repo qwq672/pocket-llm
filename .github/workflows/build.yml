@@ -76,16 +76,21 @@ jobs:
       - name: Fetch Vulkan-Hpp (C++ bindings, not in NDK)
         run: |
           # NDK 只有 vulkan.h (C API)，ggml-vulkan.cpp 需要 vulkan.hpp (C++ binding)。
-          # Vulkan-Hpp 仓库的 vulkan/ 目录包含 vulkan.hpp + vulkan_core.h + vulkan_platform.h 等，
-          # 必须整体复制覆盖 NDK 自带的 vulkan/ 目录，否则 vulkan.hpp 与 NDK vulkan_core.h
-          # 版本不匹配会触发 static_assert（Wrong VK_HEADER_VERSION）。
+          # 需要两个仓库：
+          # - Vulkan-Headers: vulkan_core.h, vulkan.h, vulkan_platform.h 等 C headers
+          # - Vulkan-Hpp: vulkan.hpp 等 C++ binding headers
+          # 两者必须来自同一天 commit，否则版本不匹配触发 static_assert。
+          # 整体复制覆盖 NDK 的 vulkan/ 目录，保证版本一致。
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers /tmp/vulkan-headers
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Hpp /tmp/vulkan-hpp
           NDK_INCLUDE=/usr/local/lib/android/sdk/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan
-          # 备份 NDK 自带的 vulkan_android.h（Android 平台特有），复制完后再恢复
+          # 备份 NDK 自带的 vulkan_android.h（Android 平台特有）
           sudo cp $NDK_INCLUDE/vulkan_android.h /tmp/vulkan_android.h.bak 2>/dev/null || true
-          sudo rm -f $NDK_INCLUDE/*
+          sudo rm -rf $NDK_INCLUDE
+          sudo mkdir -p $NDK_INCLUDE
+          sudo cp -r /tmp/vulkan-headers/include/vulkan/* $NDK_INCLUDE/
           sudo cp -r /tmp/vulkan-hpp/vulkan/* $NDK_INCLUDE/
-          # 恢复 vulkan_android.h（如果 Vulkan-Hpp 没带）
+          # 恢复 vulkan_android.h
           if [ ! -f $NDK_INCLUDE/vulkan_android.h ] && [ -f /tmp/vulkan_android.h.bak ]; then
             sudo cp /tmp/vulkan_android.h.bak $NDK_INCLUDE/vulkan_android.h
           fi

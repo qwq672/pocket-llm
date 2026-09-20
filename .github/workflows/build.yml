@@ -77,26 +77,34 @@ jobs:
         run: |
           # NDK 只有 vulkan.h (C API)，ggml-vulkan.cpp 需要 vulkan.hpp (C++ binding)。
           # 需要两个仓库：
-          # - Vulkan-Headers: vulkan_core.h, vulkan.h, vulkan_platform.h 等 C headers
+          # - Vulkan-Headers: vulkan_core.h, vulkan.h, vulkan_platform.h, vk_video/* 等 C headers
           # - Vulkan-Hpp: vulkan.hpp 等 C++ binding headers
           # 两者必须来自同一天 commit，否则版本不匹配触发 static_assert。
-          # 整体复制覆盖 NDK 的 vulkan/ 目录，保证版本一致。
+          # 整体复制覆盖 NDK 的 vulkan/ 和 vk_video/ 目录，保证版本一致。
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers /tmp/vulkan-headers
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Hpp /tmp/vulkan-hpp
-          NDK_INCLUDE=/usr/local/lib/android/sdk/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan
+          NDK_SYSROOT=/usr/local/lib/android/sdk/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+          NDK_VULKAN=$NDK_SYSROOT/vulkan
+          NDK_VK_VIDEO=$NDK_SYSROOT/vk_video
           # 备份 NDK 自带的 vulkan_android.h（Android 平台特有）
-          sudo cp $NDK_INCLUDE/vulkan_android.h /tmp/vulkan_android.h.bak 2>/dev/null || true
-          sudo rm -rf $NDK_INCLUDE
-          sudo mkdir -p $NDK_INCLUDE
-          sudo cp -r /tmp/vulkan-headers/include/vulkan/* $NDK_INCLUDE/
-          sudo cp -r /tmp/vulkan-hpp/vulkan/* $NDK_INCLUDE/
+          sudo cp $NDK_VULKAN/vulkan_android.h /tmp/vulkan_android.h.bak 2>/dev/null || true
+          # 覆盖 vulkan/ 目录
+          sudo rm -rf $NDK_VULKAN
+          sudo mkdir -p $NDK_VULKAN
+          sudo cp -r /tmp/vulkan-headers/include/vulkan/* $NDK_VULKAN/
+          sudo cp -r /tmp/vulkan-hpp/vulkan/* $NDK_VULKAN/
+          # 覆盖 vk_video/ 目录（vulkan_core.h 依赖 vk_video headers）
+          sudo rm -rf $NDK_VK_VIDEO
+          sudo mkdir -p $NDK_VK_VIDEO
+          sudo cp -r /tmp/vulkan-headers/include/vk_video/* $NDK_VK_VIDEO/ 2>/dev/null || true
           # 恢复 vulkan_android.h
-          if [ ! -f $NDK_INCLUDE/vulkan_android.h ] && [ -f /tmp/vulkan_android.h.bak ]; then
-            sudo cp /tmp/vulkan_android.h.bak $NDK_INCLUDE/vulkan_android.h
+          if [ ! -f $NDK_VULKAN/vulkan_android.h ] && [ -f /tmp/vulkan_android.h.bak ]; then
+            sudo cp /tmp/vulkan_android.h.bak $NDK_VULKAN/vulkan_android.h
           fi
-          ls $NDK_INCLUDE/vulkan.hpp
-          ls $NDK_INCLUDE/vulkan_core.h
-          grep -E 'define VK_HEADER_VERSION ' $NDK_INCLUDE/vulkan_core.h || true
+          ls $NDK_VULKAN/vulkan.hpp
+          ls $NDK_VULKAN/vulkan_core.h
+          ls $NDK_VK_VIDEO/vulkan_video_codec_h264std.h 2>/dev/null || echo "no vk_video headers"
+          grep -E 'define VK_HEADER_VERSION ' $NDK_VULKAN/vulkan_core.h || true
 
       - name: Cache Gradle wrapper and build outputs
         uses: actions/cache@v4

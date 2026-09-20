@@ -56,6 +56,16 @@ jobs:
           git clone --depth 1 --branch "${LLAMA_REF}" \
             https://github.com/ggml-org/llama.cpp app/src/main/cpp/llama.cpp
 
+      - name: Fetch SPIRV-Headers (for Vulkan backend)
+        run: |
+          # ggml-vulkan 依赖 SPIRV-Headers 编译 Vulkan shaders。
+          # 先 clone + install 到 /usr/local，让 find_package(SPIRV-Headers) 能找到。
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers
+          cd /tmp/spirv-headers
+          mkdir build && cd build
+          cmake -DCMAKE_INSTALL_PREFIX=/usr/local ..
+          sudo make install
+
       - name: Cache Gradle wrapper and build outputs
         uses: actions/cache@v4
         with:

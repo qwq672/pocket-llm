@@ -29,7 +29,7 @@ android {
                 // 让 CMake 决定大部分 flag，这里只传必要的
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
-                    "-DANDROID_PLATFORM=android-26",
+                    "-DANDROID_PLATFORM=android-28",  // API 28+ 有 Vulkan 1.1 (vkGetPhysicalDeviceFeatures2)
                     "-DCMAKE_BUILD_TYPE=Release"
                 )
                 // 注意：这些 flags 会同时作用于 add_subdirectory 的 llama.cpp。

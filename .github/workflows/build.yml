@@ -62,8 +62,9 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-            app/.cxx
-          key: gradle-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          key: gradle-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}-v1
+          # 注意：app/.cxx 不缓存，因为 CMakeLists.txt 改动需要重新 configure。
+          # CMake 编译慢但保证 Vulkan/OpenCL 等后端真的被编译进去。
 
       - name: Build release APK (CPU + Vulkan + OpenCL, arm64-v8a)
         run: |

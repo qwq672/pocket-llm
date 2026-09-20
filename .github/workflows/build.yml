@@ -76,16 +76,20 @@ jobs:
       - name: Fetch Vulkan-Hpp (C++ bindings, not in NDK)
         run: |
           # NDK 只有 vulkan.h (C API)，ggml-vulkan.cpp 需要 vulkan.hpp (C++ binding)。
-          # 需要两个仓库：
+          # 需要三个仓库：
           # - Vulkan-Headers: vulkan_core.h, vulkan.h, vulkan_platform.h, vk_video/* 等 C headers
           # - Vulkan-Hpp: vulkan.hpp 等 C++ binding headers
-          # 两者必须来自同一天 commit，否则版本不匹配触发 static_assert。
-          # 整体复制覆盖 NDK 的 vulkan/ 和 vk_video/ 目录，保证版本一致。
+          # - SPIRV-Headers: spirv/ 目录（ggml-vulkan.cpp 还 include <spirv/unified1/spirv.hpp>）
+          # 三者复制到 NDK sysroot include，让 NDK clang++ 能找到。
+          # Vulkan-Headers 和 Vulkan-Hpp 的 main 分支 VK_HEADER_VERSION 可能差 1-2，
+          # 用 sed 把 vulkan.hpp 的版本号同步成 vulkan_core.h 的实际版本。
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers /tmp/vulkan-headers
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Hpp /tmp/vulkan-hpp
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers-2
           NDK_SYSROOT=/usr/local/lib/android/sdk/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
           NDK_VULKAN=$NDK_SYSROOT/vulkan
           NDK_VK_VIDEO=$NDK_SYSROOT/vk_video
+          NDK_SPIRV=$NDK_SYSROOT/spirv
           # 备份 NDK 自带的 vulkan_android.h（Android 平台特有）
           sudo cp $NDK_VULKAN/vulkan_android.h /tmp/vulkan_android.h.bak 2>/dev/null || true
           # 覆盖 vulkan/ 目录
@@ -93,18 +97,26 @@ jobs:
           sudo mkdir -p $NDK_VULKAN
           sudo cp -r /tmp/vulkan-headers/include/vulkan/* $NDK_VULKAN/
           sudo cp -r /tmp/vulkan-hpp/vulkan/* $NDK_VULKAN/
-          # 覆盖 vk_video/ 目录（vulkan_core.h 依赖 vk_video headers）
+          # 覆盖 vk_video/ 目录
           sudo rm -rf $NDK_VK_VIDEO
           sudo mkdir -p $NDK_VK_VIDEO
           sudo cp -r /tmp/vulkan-headers/include/vk_video/* $NDK_VK_VIDEO/ 2>/dev/null || true
+          # 覆盖 spirv/ 目录（SPIRV-Headers 仓库结构：include/spirv/*）
+          sudo rm -rf $NDK_SPIRV
+          sudo mkdir -p $NDK_SPIRV/unified1
+          sudo cp -r /tmp/spirv-headers-2/include/spirv/* $NDK_SPIRV/unified1/ 2>/dev/null || true
           # 恢复 vulkan_android.h
           if [ ! -f $NDK_VULKAN/vulkan_android.h ] && [ -f /tmp/vulkan_android.h.bak ]; then
             sudo cp /tmp/vulkan_android.h.bak $NDK_VULKAN/vulkan_android.h
           fi
+          # 同步 vulkan.hpp 的 VK_HEADER_VERSION 到 vulkan_core.h 的实际版本
+          CORE_VER=$(grep -E 'define VK_HEADER_VERSION ' $NDK_VULKAN/vulkan_core.h | awk '{print $3}')
+          echo "vulkan_core.h VK_HEADER_VERSION = $CORE_VER"
+          sudo sed -i "s/static_assert(VK_HEADER_VERSION == [0-9]*/static_assert(VK_HEADER_VERSION == $CORE_VER/" $NDK_VULKAN/vulkan.hpp
+          grep -E 'static_assert.VK_HEADER_VERSION' $NDK_VULKAN/vulkan.hpp | head -1 || true
           ls $NDK_VULKAN/vulkan.hpp
           ls $NDK_VULKAN/vulkan_core.h
-          ls $NDK_VK_VIDEO/vulkan_video_codec_h264std.h 2>/dev/null || echo "no vk_video headers"
-          grep -E 'define VK_HEADER_VERSION ' $NDK_VULKAN/vulkan_core.h || true
+          ls $NDK_SPIRV/unified1/spirv.hpp 2>/dev/null || echo "no spirv.hpp"
 
       - name: Cache Gradle wrapper and build outputs
         uses: actions/cache@v4

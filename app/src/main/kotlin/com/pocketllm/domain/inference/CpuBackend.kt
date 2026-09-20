@@ -69,6 +69,22 @@ class CpuBackend(
         native.llamaCompletion(prompt, tokCb, stopCb)
     }
 
+    override suspend fun completionChat(
+        messages: List<NativeBridge.ChatMsg>,
+        thinkingMode: Boolean,
+        onToken: (String) -> Unit,
+        onStopReason: (String) -> Unit
+    ) = withContext(Dispatchers.Default) {
+        if (!loaded) { onStopReason("no_model"); return@withContext }
+        val tokCb = object : StringCallback {
+            override fun onValue(value: String) { onToken(value) }
+        }
+        val stopCb = object : StringCallback {
+            override fun onValue(value: String) { onStopReason(value) }
+        }
+        native.llamaCompletionChat(messages.toTypedArray(), thinkingMode, tokCb, stopCb)
+    }
+
     override fun interrupt() = native.llamaInterrupt()
     override fun close() {
         native.llamaUnload()

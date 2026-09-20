@@ -57,6 +57,26 @@ class NativeBridge {
         stopCallback: StringCallback
     )
 
+    /**
+     * 流式补全（chat template 版）。
+     * 把对话历史以消息数组形式传给 native，native 端用模型内置 chat template 格式化。
+     * 这比 llamaCompletion 的 String prompt 更可靠 —— 避免简化模板与模型不匹配。
+     *
+     * @param messages 消息数组，每条: role + content。role: "system" / "user" / "assistant"
+     * @param thinkingMode true 时在 system message 末尾加 "/think"（Qwen3 支持）
+     * @param tokenCallback 每生成一个 token 调用一次
+     * @param stopCallback 完成时调用，传入 stop reason
+     */
+    external fun llamaCompletionChat(
+        messages: Array<ChatMsg>,
+        thinkingMode: Boolean,
+        tokenCallback: StringCallback,
+        stopCallback: StringCallback
+    )
+
+    /** 一条 chat 消息（给 llamaCompletionChat 用） */
+    data class ChatMsg(val role: String, val content: String)
+
     external fun llamaInterrupt()
 
     // -------- 状态查询 --------

@@ -4,6 +4,8 @@ import android.util.Log
 import com.pocketllm.infra.jni.NativeBridge
 import com.pocketllm.util.CpuInfo
 import com.pocketllm.util.ThermalMonitor
+import com.pocketllm.util.loge
+import com.pocketllm.util.logi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,7 +23,8 @@ import kotlinx.coroutines.withContext
  * - 维护当前 Backend 实例，按 [InferenceConfig.backend] 切换。
  * - 把 [MemoryOptimizer] 与 [ThermalGovernor] 注入到当前 Backend。
  * - 暴露 stats 流，UI 实时显示。
- * - 当请求的后端不可用时自动回退到 CPU，避免静默加载失败。
+ * - 后端回退顺序：用户选择 → NPU → Vulkan → OpenCL → CPU
+ *   某一级后端加载失败时自动 fallback 到下一级，保证推理总可用。
  *
  * 单例，App 生命周期内唯一。线程安全。
  */
@@ -46,46 +49,75 @@ class InferenceEngine(
     @Volatile private var currentModelPath: String? = null
     @Volatile private var effectiveBackend: BackendType = BackendType.CPU
 
-    /** 切换后端 + 加载模型。已加载相同后端则只更新 config。 */
+    /**
+     * 后端回退优先级链（从高到低）。
+     * 用户选的 backend 放最前，后面按 NPU → Vulkan → OpenCL → CPU 排。
+     * 加载失败时按顺序尝试下一个。
+     */
+    private fun fallbackChain(userChoice: BackendType): List<BackendType> {
+        val chain = LinkedHashSet<BackendType>()
+        chain.add(userChoice)
+        // 按用户要求的顺序：NPU → Vulkan → OpenCL → CPU
+        chain.add(BackendType.NPU)
+        chain.add(BackendType.VULKAN)
+        chain.add(BackendType.OPENCL)
+        chain.add(BackendType.CPU)  // CPU 永远兜底
+        return chain.toList()
+    }
+
+    /** 切换后端 + 加载模型。按回退链尝试，全部失败才报错。 */
     suspend fun loadModel(modelPath: String, config: InferenceConfig): Result<Unit> = withContext(Dispatchers.Default) {
         mutex.withLock {
             runCatching {
-                // 1. 先检查后端可用性，必要时回退到 CPU
-                var backendType = config.backend
-                if (!isBackendAvailable(backendType)) {
-                    Log.w("InferenceEngine",
-                        "backend ${config.backend} unavailable (not built or device lacks support), falling back to CPU")
-                    backendType = BackendType.CPU
-                }
-
-                // 2. 若后端/模型变了，先卸载旧的并创建新的
-                val needSwitch = currentBackend?.type != backendType || currentModelPath != modelPath
-                if (needSwitch) {
-                    currentBackend?.close()
-                    currentBackend = createBackend(backendType)
-                }
-
-                val backend = currentBackend ?: error("backend null")
-                if (!backend.isAvailable()) error("后端 ${backend.type} 不可用")
-
-                // 3. 注入热档策略
                 val tuned = thermalGovernor.tuneConfig(config)
+                val chain = fallbackChain(config.backend)
+                logi("InferenceEngine: loadModel ${modelPath.substringAfterLast('/')} chain=$chain")
 
-                // 4. 加载（C++ 侧会做 mmap + warmup 内存池）
-                val ok = backend.load(modelPath, tuned)
-                if (!ok) error("加载失败：$modelPath")
+                var lastError: String? = null
+                var loadedBackend: Backend? = null
+                var loadedType: BackendType = BackendType.CPU
 
+                for (type in chain) {
+                    if (!isBackendAvailable(type)) {
+                        logi("InferenceEngine: $type not available, skip")
+                        continue
+                    }
+                    logi("InferenceEngine: trying $type ...")
+                    runCatching {
+                        // 每次尝试都先卸载旧的
+                        currentBackend?.close()
+                        currentBackend = null
+                        val backend = createBackend(type)
+                        if (!backend.isAvailable()) {
+                            error("后端 $type isAvailable()=false")
+                        }
+                        val ok = backend.load(modelPath, tuned)
+                        if (!ok) error("load() returned false")
+                        loadedBackend = backend
+                        loadedType = type
+                        logi("InferenceEngine: $type load OK")
+                    }.onFailure {
+                        lastError = "$type: ${it.message}"
+                        loge("InferenceEngine: $type failed: ${it.message}", it)
+                    }
+                    if (loadedBackend != null) break
+                }
+
+                if (loadedBackend == null) {
+                    error("所有后端加载失败：$lastError")
+                }
+
+                currentBackend = loadedBackend
                 currentModelPath = modelPath
-                effectiveBackend = backend.type
+                effectiveBackend = loadedType
                 _state.value = _state.value.copy(
                     loaded = true,
                     modelPath = modelPath,
-                    backend = backend.type,
+                    backend = loadedType,
                     config = tuned,
                     error = null
                 )
-                Log.i("InferenceEngine",
-                    "loaded ${modelPath.substringAfterLast('/')} via ${backend.type}")
+                logi("InferenceEngine: loaded ${modelPath.substringAfterLast('/')} via ${loadedType}")
                 Unit
             }.onFailure {
                 Log.e("InferenceEngine", "load failed", it)
@@ -108,6 +140,25 @@ class InferenceEngine(
             backend.completion(prompt, onToken, onStop)
         } catch (t: Throwable) {
             Log.e("InferenceEngine", "completion threw", t)
+            onStop("exception: ${t.message ?: t.javaClass.simpleName}")
+        }
+    }
+
+    suspend fun completionChat(
+        messages: List<com.pocketllm.infra.jni.NativeBridge.ChatMsg>,
+        thinkingMode: Boolean,
+        onToken: (String) -> Unit,
+        onStop: (String) -> Unit
+    ) {
+        val backend = currentBackend ?: run {
+            onStop("no_model"); return
+        }
+        if (!backend.isLoaded()) { onStop("no_model"); return }
+        thermalGovernor.beforeCompletion(backend)
+        try {
+            backend.completionChat(messages, thinkingMode, onToken, onStop)
+        } catch (t: Throwable) {
+            Log.e("InferenceEngine", "completionChat threw", t)
             onStop("exception: ${t.message ?: t.javaClass.simpleName}")
         }
     }

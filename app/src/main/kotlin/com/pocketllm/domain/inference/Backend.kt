@@ -48,13 +48,27 @@ interface Backend : AutoCloseable {
     fun isLoaded(): Boolean
 
     /**
-     * 流式补全。
+     * 流式补全（简化 prompt 模板）。
      * @param prompt 已含对话模板的字符串
      * @param onToken 每生成一个 token 回调一次（主线程）
      * @param onStopReason "stop" | "length" | "interrupted"
      */
     suspend fun completion(
         prompt: String,
+        onToken: (String) -> Unit,
+        onStopReason: (String) -> Unit
+    )
+
+    /**
+     * 流式补全（chat template 版）。
+     * @param messages 消息列表，role: "system" / "user" / "assistant"
+     * @param thinkingMode 是否开启思考模式（Qwen3 /think 标志）
+     * @param onToken 每生成一个 token 回调一次
+     * @param onStopReason stop reason
+     */
+    suspend fun completionChat(
+        messages: List<com.pocketllm.infra.jni.NativeBridge.ChatMsg>,
+        thinkingMode: Boolean,
         onToken: (String) -> Unit,
         onStopReason: (String) -> Unit
     )

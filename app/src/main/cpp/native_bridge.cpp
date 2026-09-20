@@ -434,6 +434,227 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
     call_string_cb(env, stopCb, stop_reason);
 }
 
+// ---------- chat template 版补全 ----------
+// 把 messages 数组用模型内置 chat template 格式化，然后走相同的增量 eval + 生成流程
+extern "C" JNIEXPORT void JNICALL
+Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletionChat(
+    JNIEnv* env, jclass,
+    jobjectArray jMessages, jboolean jThinkingMode,
+    jobject tokenCb, jobject stopCb)
+{
+    if (!g_ctx || !g_model || !g_vocab) {
+        LOGE("llamaCompletionChat: no_model");
+        call_string_cb(env, stopCb, "no_model");
+        return;
+    }
+    if (!jMessages) {
+        call_string_cb(env, stopCb, "empty_messages");
+        return;
+    }
+
+    // 1. 把 jMessages (Array<ChatMsg>) 拆成 std::vector<llama_chat_message>
+    jsize n_msg = env->GetArrayLength(jMessages);
+    if (n_msg <= 0) {
+        call_string_cb(env, stopCb, "empty_messages");
+        return;
+    }
+
+    // 找 ChatMsg class 的 role / content 字段
+    jclass msgCls = env->FindClass("com/pocketllm/infra/jni/NativeBridge$ChatMsg");
+    if (!msgCls || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        LOGE("llamaCompletionChat: cannot find ChatMsg class");
+        call_string_cb(env, stopCb, "no_chatmsg_class");
+        return;
+    }
+    jfieldID roleFid = env->GetFieldID(msgCls, "role", "Ljava/lang/String;");
+    jfieldID contentFid = env->GetFieldID(msgCls, "content", "Ljava/lang/String;");
+    if (!roleFid || !contentFid) {
+        env->ExceptionClear();
+        LOGE("llamaCompletionChat: cannot find ChatMsg.role/content");
+        env->DeleteLocalRef(msgCls);
+        call_string_cb(env, stopCb, "no_chatmsg_fields");
+        return;
+    }
+
+    std::vector<llama_chat_message> chat;
+    chat.reserve(n_msg);
+    // 持久化 string 内容到 std::string，chat[i].role/content 指向 .c_str()
+    std::vector<std::pair<std::string, std::string>> strings;
+    strings.reserve(n_msg);
+
+    bool thinkingMode = (jThinkingMode == JNI_TRUE);
+    const std::string think_flag = thinkingMode ? "/think" : "/no_think";
+
+    for (jsize i = 0; i < n_msg; i++) {
+        jobject msg = env->GetObjectArrayElement(jMessages, i);
+        if (!msg) continue;
+        jstring jrole = (jstring) env->GetObjectField(msg, roleFid);
+        jstring jcontent = (jstring) env->GetObjectField(msg, contentFid);
+        std::string role = jrole ? std::string(env->GetStringUTFChars(jrole, nullptr)) : "user";
+        std::string content = jcontent ? std::string(env->GetStringUTFChars(jcontent, nullptr)) : "";
+        if (jrole) env->ReleaseStringUTFChars(jrole, env->GetStringUTFChars(jrole, nullptr));
+        if (jcontent) env->ReleaseStringUTFChars(jcontent, env->GetStringUTFChars(jcontent, nullptr));
+
+        // 如果是 system message 且 thinkingMode 开启，追加 /think 标志
+        if (role == "system" && !content.empty()) {
+            content += "\n" + think_flag;
+        }
+
+        strings.emplace_back(std::move(role), std::move(content));
+        env->DeleteLocalRef(msg);
+    }
+    env->DeleteLocalRef(msgCls);
+
+    for (auto& p : strings) {
+        chat.push_back({p.first.c_str(), p.second.c_str()});
+    }
+    LOGI("llamaCompletionChat: n_msg=%zu  thinking=%d", chat.size(), thinkingMode ? 1 : 0);
+
+    // 2. 拿模型内置 chat template
+    const char* tmpl = llama_model_chat_template(g_model, nullptr);
+    if (!tmpl) {
+        LOGE("llamaCompletionChat: model has no chat template, fallback to llamaCompletion");
+        // 拼简化 prompt
+        std::string sp;
+        for (auto& p : strings) {
+            sp += p.first + ": " + p.second + "\n";
+        }
+        sp += "Assistant: ";
+        // 走原有逻辑（用 sp 作为 prompt）
+        // 这里简化：直接调 call_string_cb 报错，让 Kotlin 侧用旧路径
+        call_string_cb(env, stopCb, "no_chat_template");
+        return;
+    }
+
+    // 3. 用 llama_chat_apply_template 格式化 prompt
+    std::vector<char> buf(8192);
+    int32_t needed = llama_chat_apply_template(tmpl, chat.data(), chat.size(),
+                                                /*add_ass=*/true,
+                                                buf.data(), (int32_t)buf.size());
+    if (needed < 0) {
+        LOGE("llamaCompletionChat: apply template failed");
+        call_string_cb(env, stopCb, "template_failed");
+        return;
+    }
+    if (needed > (int32_t)buf.size()) {
+        buf.resize(needed + 1);
+        needed = llama_chat_apply_template(tmpl, chat.data(), chat.size(),
+                                            true, buf.data(), (int32_t)buf.size());
+        if (needed < 0) {
+            LOGE("llamaCompletionChat: apply template (retry) failed");
+            call_string_cb(env, stopCb, "template_failed");
+            return;
+        }
+    }
+    std::string sp(buf.data(), needed);
+    LOGI("llamaCompletionChat: formatted prompt_len=%zu", sp.size());
+
+    // 4. 锁 + 增量 eval + 生成（复用 llamaCompletion 逻辑）
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_interrupt.store(false);
+
+    // 增量 eval 判断
+    bool need_clear = false;
+    if (sp.empty()) {
+        need_clear = true;
+    } else if (g_n_past_total == 0) {
+        need_clear = false;
+    } else if (sp.size() < g_last_prompt.size() ||
+               sp.compare(0, g_last_prompt.size(), g_last_prompt) != 0) {
+        need_clear = true;
+        LOGI("llamaCompletionChat: prompt prefix changed, clear KV");
+    }
+    if (need_clear) {
+        llama_memory_t mem = llama_get_memory(g_ctx);
+        if (mem) llama_memory_clear(mem, true);
+        g_n_past_total = 0;
+        g_ctx_used.store(0);
+    }
+    g_last_prompt = sp;
+
+    // tokenize
+    std::vector<llama_token> tokens;
+    {
+        int32_t n = llama_tokenize(g_vocab, sp.c_str(), (int32_t)sp.size(),
+                                   nullptr, 0, true, true);
+        if (n < 0) n = -n;
+        tokens.resize((size_t)n);
+        int32_t actual = llama_tokenize(g_vocab, sp.c_str(), (int32_t)sp.size(),
+                                        tokens.data(), n, true, true);
+        if (actual < 0) actual = -actual;
+        tokens.resize((size_t)actual);
+    }
+    LOGI("llamaCompletionChat: tokens=%zu skip=%d eval=%zu",
+         tokens.size(), g_n_past_total,
+         (size_t)(tokens.size() > (size_t)g_n_past_total ? tokens.size() - g_n_past_total : 0));
+    if (tokens.empty()) {
+        call_string_cb(env, stopCb, "empty_tokens");
+        return;
+    }
+
+    const int maxCtx = (int)llama_n_ctx(g_ctx);
+    if ((int)tokens.size() > maxCtx - 4) {
+        tokens.erase(tokens.begin(), tokens.end() - (maxCtx - 4));
+        llama_memory_t mem = llama_get_memory(g_ctx);
+        if (mem) llama_memory_clear(mem, true);
+        g_n_past_total = 0;
+        g_ctx_used.store(0);
+    }
+
+    std::string stop_reason = "stop";
+    bool stopped = false;
+    int n_past = g_n_past_total;
+
+    // prompt eval
+    for (size_t i = (size_t)g_n_past_total; i < tokens.size(); i += 256) {
+        if (g_interrupt.load()) { stop_reason = "interrupted"; stopped = true; break; }
+        int n = std::min((int)256, (int)(tokens.size() - i));
+        llama_batch batch = llama_batch_get_one(&tokens[i], n);
+        int rc = llama_decode(g_ctx, batch);
+        if (rc != 0) {
+            LOGE("llamaCompletionChat: prompt decode failed rc=%d at i=%zu", rc, i);
+            stop_reason = "decode_failed"; stopped = true; break;
+        }
+        n_past += n;
+        g_ctx_used.store(n_past);
+    }
+    g_n_past_total = n_past;
+    LOGI("llamaCompletionChat: prompt eval done, n_past=%d", n_past);
+
+    // generation
+    if (!stopped) {
+        llama_sampler* s = bridge_build_sampler();
+        char piece_buf[256];
+        int gen_count = 0;
+        for (int i = 0; i < 2048; i++) {
+            if (g_interrupt.load()) { stop_reason = "interrupted"; break; }
+            llama_token id = llama_sampler_sample(s, g_ctx, -1);
+            if (llama_vocab_is_eog(g_vocab, id)) { stop_reason = "stop"; break; }
+
+            int r = llama_token_to_piece(g_vocab, id, piece_buf, sizeof(piece_buf), 0, true);
+            std::string piece(r > 0 ? piece_buf : "", r > 0 ? (size_t)r : 0);
+            if (!call_string_cb(env, tokenCb, piece)) {
+                stop_reason = "callback_error"; break;
+            }
+            gen_count++;
+
+            llama_batch batch = llama_batch_get_one(&id, 1);
+            if (llama_decode(g_ctx, batch) != 0) {
+                stop_reason = "decode_failed"; break;
+            }
+            n_past++;
+            g_n_past_total = n_past;
+            g_ctx_used.store(n_past);
+            if (n_past >= maxCtx - 1) { stop_reason = "length"; break; }
+        }
+        LOGI("llamaCompletionChat: generation done, generated=%d reason=%s", gen_count, stop_reason.c_str());
+        llama_sampler_free(s);
+    }
+
+    call_string_cb(env, stopCb, stop_reason);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_pocketllm_infra_jni_NativeBridge_llamaInterrupt(JNIEnv*, jclass) {
     g_interrupt.store(true);

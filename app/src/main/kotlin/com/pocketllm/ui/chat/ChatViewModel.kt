@@ -7,6 +7,7 @@ import com.pocketllm.data.model.ChatMessage
 import com.pocketllm.data.repo.ChatRepository
 import com.pocketllm.data.repo.SettingsRepository
 import com.pocketllm.domain.inference.InferenceEngine
+import com.pocketllm.infra.jni.NativeBridge
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -73,9 +74,6 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    /**
-     * 加载指定 session 的历史消息到 UI。如果 sessionId=0 则清空当前对话。
-     */
     fun loadSession(sessionId: Long) {
         viewModelScope.launch {
             if (sessionId == 0L) {
@@ -93,9 +91,6 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    /**
-     * 创建一个新 session 并切换到它。
-     */
     fun newSession(onCreated: (Long) -> Unit = {}) {
         viewModelScope.launch {
             val modelPath = engine.state.value.modelPath
@@ -115,10 +110,8 @@ class ChatViewModel : ViewModel() {
             return
         }
 
-        // 如果当前没有 session，自动创建一个
         var sid = _ui.value.sessionId
         if (sid == 0L) {
-            // 同步创建 session（在协程里）
             viewModelScope.launch {
                 val modelPath = engine.state.value.modelPath
                 val title = text.take(20).ifBlank { "新话题" }
@@ -141,18 +134,19 @@ class ChatViewModel : ViewModel() {
         )
         logi("ChatViewModel: send ${text.length} chars (sid=$sid)")
 
-        // 持久化 user 消息
         viewModelScope.launch {
             runCatching { chatRepo.addMessage(sid, msg) }
                 .onFailure { loge("ChatVM: persist user msg failed", it) }
         }
 
         viewModelScope.launch {
-            val prompt = buildPrompt(_ui.value.messages)
             val collected = StringBuilder()
             try {
-                engine.completion(
-                    prompt = prompt,
+                // 构造 messages 数组，用模型内置 chat template
+                val messages = buildChatMessages(_ui.value.messages)
+                engine.completionChat(
+                    messages = messages,
+                    thinkingMode = thinkingMode,
                     onToken = { tok ->
                         collected.append(tok)
                         _ui.value = _ui.value.copy(currentStream = collected.toString())
@@ -174,7 +168,6 @@ class ChatViewModel : ViewModel() {
                             errorMessage = err
                         )
                         logi("ChatViewModel: completion stopped reason=$reason tps=$tps")
-                        // 持久化 assistant 消息
                         viewModelScope.launch {
                             runCatching { chatRepo.addMessage(sid, assistant) }
                                 .onFailure { loge("ChatVM: persist assistant msg failed", it) }
@@ -204,7 +197,6 @@ class ChatViewModel : ViewModel() {
     fun deleteMessage(m: ChatMessage) {
         if (_ui.value.streaming) return
         _ui.value = _ui.value.copy(messages = _ui.value.messages.filterNot { it.ts == m.ts && it.role == m.role })
-        // 同步删除 DB 记录（如果 id > 0）
         if (m.id > 0) {
             viewModelScope.launch {
                 runCatching { chatRepo.deleteMessage(m.id) }
@@ -228,11 +220,12 @@ class ChatViewModel : ViewModel() {
         )
         logi("ChatViewModel: regenerate")
         viewModelScope.launch {
-            val prompt = buildPrompt(withoutLast)
             val collected = StringBuilder()
             try {
-                engine.completion(
-                    prompt = prompt,
+                val messages = buildChatMessages(withoutLast)
+                engine.completionChat(
+                    messages = messages,
+                    thinkingMode = thinkingMode,
                     onToken = { tok ->
                         collected.append(tok)
                         _ui.value = _ui.value.copy(currentStream = collected.toString())
@@ -275,27 +268,19 @@ class ChatViewModel : ViewModel() {
     }
 
     /**
-     * 构造聊天 prompt。
-     * - 如果 thinkingMode=true，在 system prompt 末尾加 "/think" 标志（Qwen3 支持）
-     * - 如果用户没设 system prompt，且 thinkingMode=true，自动加默认 prompt + /think
-     * - 如果 thinkingMode=false，加 /no_think 标志
+     * 把对话历史转换成 NativeBridge.ChatMsg 数组给 native 端用模型内置 chat template 格式化。
+     * - 如果 systemPrompt 非空，加一条 system message
+     * - 然后 user/assistant 消息按顺序加入
+     * - thinkingMode 由 native 端在 system message 末尾追加 /think 标志
      */
-    private fun buildPrompt(msgs: List<ChatMessage>): String {
-        val sb = StringBuilder()
-        val effectiveSystem = if (systemPrompt.isBlank()) {
-            if (thinkingMode) "/think" else "/no_think"
-        } else {
-            val flag = if (thinkingMode) "/think" else "/no_think"
-            "${systemPrompt.trim()}\n$flag"
+    private fun buildChatMessages(msgs: List<ChatMessage>): List<NativeBridge.ChatMsg> {
+        val list = mutableListOf<NativeBridge.ChatMsg>()
+        if (systemPrompt.isNotBlank()) {
+            list.add(NativeBridge.ChatMsg(role = "system", content = systemPrompt.trim()))
         }
-        sb.append("System: ").append(effectiveSystem).append("\n\n")
         for (m in msgs) {
-            when (m.role) {
-                "user"      -> sb.append("User: ").append(m.content).append("\n")
-                "assistant" -> sb.append("Assistant: ").append(m.content).append("\n")
-            }
+            list.add(NativeBridge.ChatMsg(role = m.role, content = m.content))
         }
-        sb.append("Assistant: ")
-        return sb.toString()
+        return list
     }
 }

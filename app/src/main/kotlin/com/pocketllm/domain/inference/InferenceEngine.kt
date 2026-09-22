@@ -31,7 +31,8 @@ import kotlinx.coroutines.withContext
 class InferenceEngine(
     private val nativeBridge: NativeBridge,
     private val thermalMonitor: ThermalMonitor,
-    private val cpuInfo: CpuInfo
+    private val cpuInfo: CpuInfo,
+    private val appContext: android.content.Context? = null
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutex = Mutex()
@@ -136,11 +137,13 @@ class InferenceEngine(
         }
         if (!backend.isLoaded()) { onStop("no_model"); return }
         thermalGovernor.beforeCompletion(backend)
-        try {
-            backend.completion(prompt, onToken, onStop)
-        } catch (t: Throwable) {
-            Log.e("InferenceEngine", "completion threw", t)
-            onStop("exception: ${t.message ?: t.javaClass.simpleName}")
+        withInferenceBoost {
+            try {
+                backend.completion(prompt, onToken, onStop)
+            } catch (t: Throwable) {
+                Log.e("InferenceEngine", "completion threw", t)
+                onStop("exception: ${t.message ?: t.javaClass.simpleName}")
+            }
         }
     }
 
@@ -155,11 +158,46 @@ class InferenceEngine(
         }
         if (!backend.isLoaded()) { onStop("no_model"); return }
         thermalGovernor.beforeCompletion(backend)
+        withInferenceBoost {
+            try {
+                backend.completionChat(messages, thinkingMode, onToken, onStop)
+            } catch (t: Throwable) {
+                Log.e("InferenceEngine", "completionChat threw", t)
+                onStop("exception: ${t.message ?: t.javaClass.simpleName}")
+            }
+        }
+    }
+
+    /**
+     * 推理期间的性能优化包装：
+     * 1. 持有 PARTIAL_WAKE_LOCK，防止设备 doze 导致推理中断
+     * 2. 提升当前线程优先级到 URGENT_DISPLAY，减少调度延迟
+     */
+    private suspend inline fun <T> withInferenceBoost(block: () -> T): T {
+        // 获取 wake lock
+        val pm = appContext?.getSystemService(android.content.Context.POWER_SERVICE)
+                as? android.os.PowerManager
+        var wakeLock: android.os.PowerManager.WakeLock? = null
         try {
-            backend.completionChat(messages, thinkingMode, onToken, onStop)
-        } catch (t: Throwable) {
-            Log.e("InferenceEngine", "completionChat threw", t)
-            onStop("exception: ${t.message ?: t.javaClass.simpleName}")
+            wakeLock = pm?.newWakeLock(
+                android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                "pocketllm:infer"
+            )?.apply { acquire(60_000) } // 60 秒超时，避免泄漏
+        } catch (_: Throwable) {}
+
+        // 提升线程优先级
+        val oldPriority = try {
+            android.os.Process.getThreadPriority(android.os.Process.myTid())
+        } catch (_: Throwable) { 0 }
+        try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
+        } catch (_: Throwable) {}
+
+        try {
+            return block()
+        } finally {
+            try { android.os.Process.setThreadPriority(oldPriority) } catch (_: Throwable) {}
+            try { wakeLock?.release() } catch (_: Throwable) {}
         }
     }
 

@@ -33,7 +33,8 @@ class AppContainer(context: Context) {
     val inferenceEngine: InferenceEngine = InferenceEngine(
         nativeBridge = nativeBridge,
         thermalMonitor = thermalMonitor,
-        cpuInfo = cpuInfo
+        cpuInfo = cpuInfo,
+        appContext = appContext
     )
 
     val modelRepository: ModelRepository = ModelRepository(appContext)

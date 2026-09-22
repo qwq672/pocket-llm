@@ -29,11 +29,18 @@ class VulkanBackend(
 
     override suspend fun load(modelPath: String, config: InferenceConfig): Boolean = withContext(Dispatchers.Default) {
         val threads = config.effectiveThreads(cpuInfo.bigCores)
-        // nGpuLayers=0 (UI 显示「自动」) 时给一个保守默认值 12，
-        // 大约能让 1.5B-3B 模型大部分层跑 GPU 而不爆显存；
-        // llama.cpp 会自动 clamp 到实际层数，所以 12 不会越界。
-        // 用户可手动调更大值追求性能。
-        val gpuLayers = if (config.nGpuLayers == 0) 12 else config.nGpuLayers
+        // nGpuLayers=0 (UI 显示「自动」) 时：
+        // - 如果是 1-bit / ternary 模型（Bonsai Q1_0 等），全 offload 到 GPU（999）
+        //   因为 CPU 1-bit kernel 极慢，GPU 快 10×
+        // - 否则给保守默认 12（1.5B-3B 模型大部分层跑 GPU 而不爆显存）
+        val is1BitModel = modelPath.contains("bonsai", ignoreCase = true) ||
+                         modelPath.contains("q1_0", ignoreCase = true) ||
+                         modelPath.contains("ternary", ignoreCase = true)
+        val gpuLayers = when {
+            config.nGpuLayers == 0 && is1BitModel -> 999  // 全 offload
+            config.nGpuLayers == 0 -> 12
+            else -> config.nGpuLayers
+        }
         val ok = native.llamaLoad(
             modelPath = modelPath,
             backend = type.id,

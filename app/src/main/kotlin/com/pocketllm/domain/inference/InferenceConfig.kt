@@ -43,5 +43,5 @@ data class InferenceConfig(
      * - 用户设 0 (UI 显示「自动」) 时按大核数，但限制在 [2, 4]
      *   （大核通常 2-4 个，再多就是中核或小核，反而拖慢推理 + 发烫）
      */
-    fun effectiveThreads(bigCores: Int): Int = if (cpuThreads <= 0) bigCores.coerceIn(2, 4) else cpuThreads
+    fun effectiveThreads(bigCores: Int): Int = if (cpuThreads <= 0) bigCores.coerceIn(2, 6) else cpuThreads
 }

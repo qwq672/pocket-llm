@@ -158,6 +158,16 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaLoad(
 
     std::lock_guard<std::mutex> lk(g_mutex);
     bool ok = false;
+
+    // 检测是否为 1-bit / ternary 模型（Bonsai 等），日志提示
+    std::string path_str(path);
+    bool is_1bit = path_str.find("bonsai") != std::string::npos ||
+                   path_str.find("q1_0") != std::string::npos ||
+                   path_str.find("ternary") != std::string::npos;
+    if (is_1bit) {
+        LOGI("llamaLoad: detected 1-bit/ternary model, GPU backend strongly recommended");
+    }
+
     if (g_ctx)   { llama_free(g_ctx); g_ctx = nullptr; }
     if (g_model) { llama_model_free(g_model); g_model = nullptr; }
     g_vocab = nullptr;
@@ -186,6 +196,10 @@ Java_com_pocketllm_infra_jni_NativeBridge_llamaLoad(
         cp.n_threads_batch = threads > 0 ? threads : 4;
         POCKET_SET_FLASH_ATTN(cp);
         cp.no_perf      = false;
+        // 移动端单流推理：限制 logits/output buffer 大小，节省内存
+        // 默认 n_outputs = n_batch 会按最大 batch 预分配，但流式生成每次只 1 token
+        cp.n_outputs      = physicalBatch;  // 物理 batch 大小足够
+        cp.n_outputs_max  = 0;  // 0 = 用默认（n_outputs）
 
         const std::string kvq_str(kvq);
         if (kvq_str == "q8_0")       cp.type_k = cp.type_v = GGML_TYPE_Q8_0;
